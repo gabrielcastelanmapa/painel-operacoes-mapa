@@ -18,6 +18,9 @@ PASTA_PLANILHAS = Path(
 )
 
 EXTENSOES_VALIDAS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+PUBLIC_FOLDER_URL = "https://drive.google.com/drive/folders/1zEHRpVyvHQ8PQve2RWhJRYqgVpjvymUf?usp=sharing"
+PUBLIC_FOLDER_ID = "1zEHRpVyvHQ8PQve2RWhJRYqgVpjvymUf"
+PUBLIC_FILENAME_CONTAINS = "Pipeline"
 
 MAPA_NAVY = "#04104E"
 MAPA_NAVY_2 = "#0B2B63"
@@ -356,10 +359,7 @@ def extrair_probabilidade(chance):
 
 
 def get_data_source_mode() -> str:
-    try:
-        return str(st.secrets.get("data_source", {}).get("mode", "local")).strip().lower()
-    except Exception:
-        return "local"
+    return "public_google_drive_folder"
 
 
 def get_gdrive_settings() -> dict:
@@ -367,7 +367,11 @@ def get_gdrive_settings() -> dict:
 
 
 def get_public_google_drive_settings() -> dict:
-    return dict(st.secrets.get("public_google_drive", {}))
+    return {
+        "folder_url": PUBLIC_FOLDER_URL,
+        "folder_id": PUBLIC_FOLDER_ID,
+        "filename_contains": PUBLIC_FILENAME_CONTAINS,
+    }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
