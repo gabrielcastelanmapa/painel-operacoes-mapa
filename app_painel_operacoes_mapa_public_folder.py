@@ -9,9 +9,6 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import streamlit.components.v1 as components
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 from openpyxl import load_workbook
 
 st.set_page_config(page_title="Painel de Operações | MAPA", layout="wide")
@@ -21,7 +18,6 @@ PASTA_PLANILHAS = Path(
 )
 
 EXTENSOES_VALIDAS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 MAPA_NAVY = "#04104E"
 MAPA_NAVY_2 = "#0B2B63"
