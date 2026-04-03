@@ -132,7 +132,9 @@ def inject_brand_css():
         .brand-logo {{
             width: 100%;
             max-width: 210px;
-            background: rgba(255,255,255,0.06);
+            background: #E7F1F5;
+            border: 1px solid rgba(255,255,255,0.30);
+            box-shadow: 0 8px 24px rgba(4,16,78,0.10);
             border-radius: 18px;
             padding: 14px;
             backdrop-filter: blur(2px);
