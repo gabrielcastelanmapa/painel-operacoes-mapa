@@ -372,6 +372,13 @@ def extrair_probabilidade(chance):
     return 0.0
 
 
+def is_alta_chance(chance):
+    if chance is None:
+        return False
+    t = str(chance).strip().lower()
+    return "alta" in t or t.startswith("1")
+
+
 def extract_folder_id(value: str | None) -> str:
     if not value:
         return ""
@@ -1194,7 +1201,37 @@ def render_charts(df_filtrado: pd.DataFrame):
         st.markdown('</div>', unsafe_allow_html=True)
 
     with gc6:
-        st.markdown('<div class="chart-box" style="min-height: 120px;"></div>', unsafe_allow_html=True)
+        base_alta_resp = (
+            df_filtrado[df_filtrado["chance_fechamento"].apply(is_alta_chance)]
+            .groupby("responsavel", dropna=False)
+            .size()
+            .reset_index(name="quantidade_alta_chance")
+            .sort_values("quantidade_alta_chance", ascending=False)
+        )
+        if base_alta_resp.empty:
+            base_alta_resp = pd.DataFrame(
+                {"responsavel": ["Sem registros"], "quantidade_alta_chance": [0]}
+            )
+        fig_alta_resp = px.bar(
+            base_alta_resp,
+            x="responsavel",
+            y="quantidade_alta_chance",
+            title="Quantidade de alta chance por responsável",
+            text_auto=True,
+            color_discrete_sequence=[MAPA_NAVY],
+        )
+        fig_alta_resp.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+            title_font=dict(size=18, color=MAPA_NAVY),
+            xaxis_title="",
+            yaxis_title="Quantidade de operações",
+            margin=dict(l=10, r=10, t=50, b=10),
+        )
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_alta_resp, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def render_operations_table(df_base: pd.DataFrame, title: str, note: str, csv_label: str, csv_file_name: str, empty_message: str, key_prefix: str):
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -1258,6 +1295,15 @@ def render_consolidated_tables(df_filtrado: pd.DataFrame):
 
 
 def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
+    titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
+    st.markdown(
+        f'<p class="section-note">Esta seção reúne filtros, métricas, gráficos e tabela(s) da visão {escape(titulo_escopo)}.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
     df_filtrado = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
     render_metric_cards(df_filtrado, escopo=escopo)
     render_charts(df_filtrado)
@@ -1340,7 +1386,7 @@ st.markdown(
     <div class="section-card">
         <div class="section-head">
             <h3 class="section-title">Navegação do painel</h3>
-            <p class="section-note">Escolha a visão consolidada, apenas Top Five ou apenas Secundárias.</p>
+            <p class="section-note">Escolha a visão inicial Top Five, depois Secundárias e, por fim, o Consolidado.</p>
         </div>
     """,
     unsafe_allow_html=True,
@@ -1348,8 +1394,9 @@ st.markdown(
 
 visao_painel = st.radio(
     "Página",
-    options=["Consolidado", "Top Five", "Secundárias"],
+    options=["Top Five", "Secundárias", "Consolidado"],
     horizontal=True,
+    index=0,
     key="visao_painel_operacoes",
     label_visibility="collapsed",
 )
