@@ -1191,38 +1191,22 @@ with gc4:
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
-st.markdown('<h3 class="subheader-inline">Lista de Operações</h3>', unsafe_allow_html=True)
+st.markdown('<h3 class="subheader-inline">Operações | Top Five</h3>', unsafe_allow_html=True)
 st.markdown(
-    '<p class="section-note" style="margin-bottom: 10px;">Classificação por cabeçalho e card expansível por clique em qualquer célula da linha.</p>',
+    '<p class="section-note" style="margin-bottom: 10px;">Tabela exclusiva das operações classificadas como Top Five, com card expansível por clique em qualquer célula da linha.</p>',
     unsafe_allow_html=True
 )
 
-lf1, lf2 = st.columns([1.2, 5])
-with lf1:
-    filtro_top5_lista = st.selectbox(
-        "Filtro da lista",
-        ["Todas", "Somente Top Five", "Somente Não Top Five"],
-        index=0,
-        key="filtro_lista_top5"
-    )
-with lf2:
-    st.markdown(
-        '<div class="list-filter-wrap">Esse filtro atua somente sobre a <strong>Lista de Operações</strong>, permitindo separar operações Top Five, não Top Five ou visualizar todas.</div>',
-        unsafe_allow_html=True
-    )
+top_five_mask = df_filtrado["top_five"].astype(str).str.strip().str.lower().eq("sim")
+base_top5 = df_filtrado[top_five_mask].copy()
 
-base_inline = df_filtrado.copy()
-if filtro_top5_lista == "Somente Top Five":
-    base_inline = base_inline[base_inline["top_five"].astype(str).str.strip().str.lower().eq("sim")]
-elif filtro_top5_lista == "Somente Não Top Five":
-    base_inline = base_inline[~base_inline["top_five"].astype(str).str.strip().str.lower().eq("sim")]
-
-csv = base_inline.to_csv(index=False).encode("utf-8-sig")
+csv_top5 = base_top5.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
-    label="Baixar CSV da lista filtrada",
-    data=csv,
-    file_name="painel_operacoes_lista.csv",
-    mime="text/csv"
+    label="Baixar CSV | Top Five",
+    data=csv_top5,
+    file_name="painel_operacoes_top_five.csv",
+    mime="text/csv",
+    key="download_csv_top_five"
 )
 
 colunas_tabela = [
@@ -1230,12 +1214,49 @@ colunas_tabela = [
     "responsavel", "chance_fechamento", "valor_operacao", "comissao_total", "comissao_mapa"
 ]
 
-base_inline = base_inline[colunas_tabela + [
+colunas_detalhe = [
     "resumo", "status_detalhado", "forma_remuneracao", "aprovacao_comite", "mandato", "atualizacao",
     "link_apresentacao", "link_documentos", "historicos_disponiveis"
-]].copy()
+]
 
-html_table = make_inline_card_table(base_inline)
-height = 220 + max(1, len(base_inline)) * 64
-components.html(html_table, height=min(max(height, 520), 2400), scrolling=True)
+base_top5 = base_top5[colunas_tabela + colunas_detalhe].copy()
+
+if base_top5.empty:
+    st.info("Nenhuma operação classificada como Top Five para os filtros atuais.")
+else:
+    html_table_top5 = make_inline_card_table(base_top5)
+    height_top5 = 220 + max(1, len(base_top5)) * 64
+    components.html(html_table_top5, height=min(max(height_top5, 520), 2400), scrolling=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+st.markdown('<h3 class="subheader-inline">Operações | Secundárias</h3>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="section-note" style="margin-bottom: 10px;">Tabela exclusiva das operações que não estão classificadas como Top Five, exibida na seção abaixo.</p>',
+    unsafe_allow_html=True
+)
+
+base_nao_top5 = df_filtrado[~top_five_mask].copy()
+
+csv_nao_top5 = base_nao_top5.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    label="Baixar CSV | Não Top Five",
+    data=csv_nao_top5,
+    file_name="painel_operacoes_nao_top_five.csv",
+    mime="text/csv",
+    key="download_csv_nao_top_five"
+)
+
+base_nao_top5 = base_nao_top5[colunas_tabela + colunas_detalhe].copy()
+
+if base_nao_top5.empty:
+    st.info("Nenhuma operação fora do grupo Top Five para os filtros atuais.")
+else:
+    html_table_nao_top5 = make_inline_card_table(base_nao_top5)
+    height_nao_top5 = 220 + max(1, len(base_nao_top5)) * 64
+    components.html(html_table_nao_top5, height=min(max(height_nao_top5, 520), 2400), scrolling=True)
+
 st.markdown("</div>", unsafe_allow_html=True)
