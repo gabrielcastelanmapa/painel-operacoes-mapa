@@ -1164,6 +1164,37 @@ def render_charts(df_filtrado: pd.DataFrame):
         st.plotly_chart(fig_chance, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+    gc5, gc6 = st.columns(2)
+    with gc5:
+        base_qtd_resp = (
+            df_filtrado.groupby("responsavel", dropna=False)
+            .size()
+            .reset_index(name="quantidade_operacoes")
+            .sort_values("quantidade_operacoes", ascending=False)
+        )
+        fig_qtd_resp = px.bar(
+            base_qtd_resp,
+            x="responsavel",
+            y="quantidade_operacoes",
+            title="Quantidade por responsável",
+            text_auto=True,
+            color_discrete_sequence=[MAPA_DARK_TEAL],
+        )
+        fig_qtd_resp.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+            title_font=dict(size=18, color=MAPA_NAVY),
+            xaxis_title="",
+            yaxis_title="Quantidade de operações",
+            margin=dict(l=10, r=10, t=50, b=10),
+        )
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_qtd_resp, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with gc6:
+        st.markdown('<div class="chart-box" style="min-height: 120px;"></div>', unsafe_allow_html=True)
 
 def render_operations_table(df_base: pd.DataFrame, title: str, note: str, csv_label: str, csv_file_name: str, empty_message: str, key_prefix: str):
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
