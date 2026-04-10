@@ -26,6 +26,27 @@ MAPA_LIGHT_2 = "#D8EDF5"
 MAPA_BORDER = "#B7D6E2"
 TEXT_DARK = "#122230"
 
+
+def normalize_category_text(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def extract_leading_number(value: str) -> int:
+    value = normalize_category_text(value)
+    match = re.match(r"^(\d+)", value)
+    return int(match.group(1)) if match else 999
+
+
+def order_categories(values):
+    present = []
+    for value in values:
+        normalized = normalize_category_text(value)
+        if normalized and normalized not in present:
+            present.append(normalized)
+    return sorted(present, key=lambda item: (extract_leading_number(item), item.lower()))
+
 OPERATION_COLOR_MAP = {
     "RE - BTS": MAPA_NAVY,
     "RE - Desenvolvimento": MAPA_TEAL,
@@ -1161,8 +1182,11 @@ def render_charts(df_filtrado: pd.DataFrame):
             df_filtrado.groupby("status", dropna=False)["valor_operacao"]
             .sum()
             .reset_index()
-            .sort_values("valor_operacao", ascending=False)
         )
+        base_status["status"] = base_status["status"].apply(normalize_category_text)
+        status_order = order_categories(base_status["status"].tolist())
+        base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
+        base_status = base_status.sort_values("status")
         fig_status = px.bar(
             base_status,
             x="status",
@@ -1170,6 +1194,7 @@ def render_charts(df_filtrado: pd.DataFrame):
             title="Valor por status",
             text_auto=True,
             color_discrete_sequence=[MAPA_TEAL],
+            category_orders={"status": status_order},
         )
         fig_status.update_layout(
             plot_bgcolor="rgba(0,0,0,0)",
@@ -1251,8 +1276,13 @@ def render_charts(df_filtrado: pd.DataFrame):
             df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"]
             .sum()
             .reset_index()
-            .sort_values("valor_operacao", ascending=False)
         )
+        base_chance["chance_fechamento"] = base_chance["chance_fechamento"].apply(normalize_category_text)
+        chance_order = order_categories(base_chance["chance_fechamento"].tolist())
+        base_chance["chance_fechamento"] = pd.Categorical(
+            base_chance["chance_fechamento"], categories=chance_order, ordered=True
+        )
+        base_chance = base_chance.sort_values("chance_fechamento")
         fig_chance = px.bar(
             base_chance,
             x="chance_fechamento",
@@ -1260,6 +1290,7 @@ def render_charts(df_filtrado: pd.DataFrame):
             title="Valor por chance de fechamento",
             text_auto=True,
             color_discrete_sequence=[MAPA_TEAL_2],
+            category_orders={"chance_fechamento": chance_order},
         )
         fig_chance.update_layout(
             plot_bgcolor="rgba(0,0,0,0)",
