@@ -134,10 +134,9 @@ def inject_brand_css():
             max-width: 210px;
             background: #E7F1F5;
             border: 1px solid rgba(255,255,255,0.30);
-            box-shadow: 0 8px 24px rgba(4,16,78,0.10);
             border-radius: 18px;
             padding: 14px;
-            backdrop-filter: blur(2px);
+            box-shadow: 0 8px 22px rgba(4,16,78,0.10);
         }}
 
         .brand-kicker {{
@@ -214,124 +213,50 @@ def inject_brand_css():
             margin: 0;
         }}
 
-        .meta-bar {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px 16px;
-            margin-top: 8px;
-            margin-bottom: 2px;
-        }}
-
-        .meta-pill {{
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: {MAPA_LIGHT};
-            border: 1px solid {MAPA_BORDER};
-            color: {MAPA_NAVY};
-            border-radius: 999px;
-            padding: 8px 12px;
-            font-size: 0.84rem;
-            font-weight: 700;
-        }}
-
-        .meta-pill .dot {{
-            width: 9px;
-            height: 9px;
-            border-radius: 50%;
-            background: {MAPA_TEAL};
-            display: inline-block;
-        }}
-
         .metric-card {{
-            background: linear-gradient(180deg, #ffffff 0%, #F8FCFD 100%);
-            border: 1px solid rgba(183,214,226,0.9);
-            border-radius: 18px;
-            padding: 18px 16px 16px 16px;
-            min-height: 116px;
-            box-shadow: 0 10px 24px rgba(4,16,78,0.05);
-            position: relative;
-            overflow: hidden;
-        }}
-
-        .metric-card::before {{
-            content: "";
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 4px;
-            background: linear-gradient(90deg, {MAPA_NAVY}, {MAPA_TEAL});
+            background: #ffffff;
+            border: 1px solid {MAPA_BORDER};
+            border-top: 4px solid {MAPA_TEAL};
+            border-radius: 14px;
+            padding: 12px 14px;
+            box-shadow: 0 6px 18px rgba(4,16,78,0.04);
         }}
 
         .metric-label {{
-            font-size: 0.78rem;
+            font-size: 11px;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #62808F;
-            font-weight: 800;
-            margin-bottom: 12px;
+            color: #5f6f79;
+            margin-bottom: 6px;
         }}
 
         .metric-value {{
-            font-size: 1.65rem;
+            font-size: 1.25rem;
             font-weight: 800;
             color: {MAPA_NAVY};
             line-height: 1.1;
-            word-break: break-word;
         }}
 
         .metric-sub {{
-            margin-top: 8px;
-            font-size: 0.8rem;
-            color: #60717B;
-        }}
-
-        .list-filter-wrap {{
-            background: linear-gradient(180deg, rgba(232,245,247,0.75), rgba(255,255,255,0.95));
-            border: 1px solid {MAPA_BORDER};
-            border-radius: 16px;
-            padding: 12px 14px 10px 14px;
-            margin-bottom: 12px;
-            color: #536975;
-            font-size: 0.9rem;
-            line-height: 1.45;
-        }}
-
-        .stDownloadButton > button {{
-            background: linear-gradient(90deg, {MAPA_NAVY}, {MAPA_TEAL});
-            color: white;
-            border: 0;
-            border-radius: 12px;
-            padding: 0.6rem 1rem;
-            font-weight: 700;
-        }}
-
-        .stDownloadButton > button:hover {{
-            filter: brightness(1.03);
-            color: white;
-            border: 0;
-        }}
-
-        div[data-testid="stSelectbox"] label,
-        div[data-testid="stCheckbox"] label {{
-            font-weight: 700;
-            color: {MAPA_NAVY};
-        }}
-
-        .chart-box {{
-            background: rgba(255,255,255,0.92);
-            border: 1px solid rgba(183,214,226,0.9);
-            border-radius: 18px;
-            padding: 10px 10px 4px 10px;
-            box-shadow: 0 10px 24px rgba(4,16,78,0.04);
+            margin-top: 6px;
+            font-size: 11px;
+            color: #6d7b84;
         }}
 
         .subheader-inline {{
-            font-size: 1.18rem;
+            font-size: 1.15rem;
             font-weight: 800;
             color: {MAPA_NAVY};
             margin: 0 0 8px 0;
+        }}
+
+        .chart-box {{
+            background: rgba(255,255,255,0.88);
+            border: 1px solid rgba(183,214,226,0.9);
+            border-radius: 18px;
+            padding: 10px 12px 2px 12px;
+            box-shadow: 0 10px 30px rgba(4,16,78,0.05);
+            margin-bottom: 16px;
         }}
         </style>
         """,
@@ -372,13 +297,6 @@ def extrair_probabilidade(chance):
     if "baixa" in t:
         return 0.25
     return 0.0
-
-
-def is_alta_chance(chance):
-    if chance is None:
-        return False
-    t = str(chance).strip().lower()
-    return "alta" in t or t.startswith("1")
 
 
 def extract_folder_id(value: str | None) -> str:
@@ -444,7 +362,7 @@ def listar_arquivos_excel(
                 downloaded = gdown.download_folder(**kwargs)
             if downloaded:
                 break
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             last_error = exc
 
     if not downloaded:
@@ -458,18 +376,18 @@ def listar_arquivos_excel(
     vistos = set()
     for item in downloaded:
         try:
-            path = Path(item)
+            file_path = Path(item)
         except Exception:
             continue
-        if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
+        if not file_path.is_file() or file_path.suffix.lower() not in EXTENSOES_VALIDAS:
             continue
-        if name_filter and name_filter.lower() not in path.name.lower():
+        if name_filter and name_filter.lower() not in file_path.name.lower():
             continue
-        resolved = str(path.resolve())
+        resolved = str(file_path.resolve())
         if resolved in vistos:
             continue
         vistos.add(resolved)
-        arquivos.append(path)
+        arquivos.append(file_path)
 
     arquivos.sort(key=infer_sort_key_from_name, reverse=True)
     return arquivos
@@ -483,19 +401,24 @@ def parse_pipeline_excel_from_path(file_path: Path):
 
     registros = []
     atual = None
+    historico_datas = {}
 
     for row in range(1, ws.max_row + 1):
         col_b = ws.cell(row=row, column=2).value
         col_d = ws.cell(row=row, column=4).value
         col_e = ws.cell(row=row, column=5).value
-        col_g = ws.cell(row=row, column=7).value
 
         if col_b == "Cliente:":
             if atual:
                 registros.append(atual)
+            historico_datas = {
+                col_idx: ws.cell(row=row, column=col_idx).value
+                for col_idx in range(7, ws.max_column + 1)
+                if ws.cell(row=row, column=col_idx).value not in [None, ""]
+            }
             atual = {
                 "cliente": col_d,
-                "atualizacao": col_g,
+                "atualizacao": None,
                 "top_five": None,
                 "operacao": None,
                 "prioridade": None,
@@ -512,7 +435,7 @@ def parse_pipeline_excel_from_path(file_path: Path):
                 "status_detalhado": None,
                 "link_apresentacao": None,
                 "link_documentos": None,
-                "historicos_disponiveis": None,
+                "historicos_disponiveis": [],
             }
             continue
 
@@ -522,8 +445,18 @@ def parse_pipeline_excel_from_path(file_path: Path):
         if col_b in LABEL_MAP:
             campo = LABEL_MAP[col_b]
             atual[campo] = col_d
-            if col_b == "Operação:" and col_e not in [None, ""]:
-                atual["status_detalhado"] = col_e
+            if col_b == "Operação:":
+                col_f = ws.cell(row=row, column=6).value
+                if col_e not in [None, ""]:
+                    atual["status_detalhado"] = col_e
+                if col_f not in [None, ""]:
+                    atual["atualizacao"] = col_f
+                historicos = []
+                for col_idx, data_hist in historico_datas.items():
+                    comentario = ws.cell(row=row, column=col_idx).value
+                    if comentario not in [None, ""]:
+                        historicos.append({"data": data_hist, "comentario": comentario})
+                atual["historicos_disponiveis"] = historicos
 
     if atual:
         registros.append(atual)
@@ -539,9 +472,6 @@ def parse_pipeline_excel_from_path(file_path: Path):
     for col in ["valor_operacao", "comissao_total", "comissao_mapa"]:
         if col in df.columns:
             df[col] = df[col].apply(to_float)
-
-    if "atualizacao" in df.columns:
-        df["atualizacao"] = pd.to_datetime(df["atualizacao"], errors="coerce")
 
     if "top_five" in df.columns:
         df["top_five"] = (
@@ -580,6 +510,37 @@ def val(text):
         return "—"
     text = str(text).strip()
     return escape(text) if text else "—"
+
+
+def format_history_label(value):
+    if value is None or value == "":
+        return "Sem data"
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.notna(ts):
+            return ts.strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    raw = str(value).strip()
+    return escape(raw) if raw else "Sem data"
+
+
+def build_history_cards(items):
+    if not items:
+        return "—"
+    blocks = ['<div class="history-list">']
+    for idx, item in enumerate(items):
+        data_label = format_history_label(item.get("data"))
+        comentario = nl2br(item.get("comentario"))
+        open_attr = " open" if idx == 0 else ""
+        blocks.append(
+            f'<details class="history-item"{open_attr}>'
+            f'<summary><span class="history-date">{data_label}</span></summary>'
+            f'<div class="history-body">{comentario}</div>'
+            f'</details>'
+        )
+    blocks.append('</div>')
+    return ''.join(blocks)
 
 
 def build_operation_color_sequence(operation_names):
@@ -697,7 +658,6 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
                 font-weight: 600;
             }}
             .pipeline-row.active td * {{ color: #ffffff !important; }}
-
             .detail-row {{ display: none; }}
             .detail-row.open {{ display: table-row; }}
             .detail-cell {{
@@ -705,9 +665,7 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
                 background: #ffffff !important;
                 border-right: 0 !important;
             }}
-            .card-box {{
-                background: #ffffff;
-            }}
+            .card-box {{ background: #ffffff; }}
             .card-section {{
                 padding: 11px 16px;
                 font-size: 12px;
@@ -721,6 +679,37 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
                 font-weight: 700;
                 margin-bottom: 4px;
                 color: {MAPA_NAVY};
+            }}
+            .history-list {{
+                display: grid;
+                gap: 8px;
+                margin-top: 6px;
+            }}
+            .history-item {{
+                background: rgba(255,255,255,0.45);
+                border: 1px solid rgba(4,16,78,0.10);
+                border-radius: 10px;
+                overflow: hidden;
+            }}
+            .history-item summary {{
+                cursor: pointer;
+                list-style: none;
+                padding: 10px 12px;
+                font-weight: 700;
+                color: {MAPA_NAVY};
+                background: rgba(4,16,78,0.04);
+            }}
+            .history-item summary::-webkit-details-marker {{ display: none; }}
+            .history-date {{
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+            }}
+            .history-body {{
+                padding: 10px 12px 12px 12px;
+                color: {TEXT_DARK};
+                line-height: 1.6;
+                background: rgba(255,255,255,0.72);
             }}
             .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
             .pill {{
@@ -773,11 +762,7 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
             parts.append(f"""<td data-sort="{escape(sort_value)}">{cell}</td>""")
         parts.append("</tr>")
 
-        atualizado = row.get("atualizacao")
-        atualizado_txt = "—"
-        if pd.notna(atualizado):
-            atualizado_txt = pd.to_datetime(atualizado).strftime("%d/%m/%Y")
-
+        historicos_html = build_history_cards(row.get("historicos_disponiveis"))
         parts.append(
             f"""
             <tr id="{row_id}" class="detail-row" data-pair="{idx}">
@@ -792,10 +777,16 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
                             <div>{nl2br(row.get('link_documentos'))}</div>
                         </div>
                         <div class="card-section">
+                            <div class="section-title">Resumo da Operação:</div>
+                            <div>{nl2br(row.get('resumo'))}</div>
+                        </div>
+                        <div class="card-section">
                             <div class="section-title">Status:</div>
                             <div>{nl2br(row.get('status_detalhado'))}</div>
-                            <div style="margin-top:8px;"><strong>Resumo da Operação:</strong></div>
-                            <div>{nl2br(row.get('resumo'))}</div>
+                        </div>
+                        <div class="card-section">
+                            <div class="section-title">Atualização:</div>
+                            <div>{nl2br(row.get('atualizacao'))}</div>
                         </div>
                         <div class="card-section">
                             <div class="section-title">Forma de Remuneração:</div>
@@ -803,12 +794,10 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
                         </div>
                         <div class="card-section">
                             <div class="section-title">Históricos Disponíveis:</div>
-                            <div>{nl2br(row.get('historicos_disponiveis'))}</div>
+                            <div>{historicos_html}</div>
                         </div>
                         <div class="card-section" style="border-bottom:0;">
-                            <span class="pill">Atualização</span>
-                            <span style="margin-left:8px;">{atualizado_txt}</span>
-                            <span style="margin-left:20px;" class="pill">Aprovação no Comitê</span>
+                            <span class="pill">Aprovação no Comitê</span>
                             <span style="margin-left:8px;">{val(row.get('aprovacao_comite'))}</span>
                             <span style="margin-left:20px;" class="pill">Mandato</span>
                             <span style="margin-left:8px;">{nl2br(row.get('mandato'))}</span>
@@ -838,77 +827,52 @@ def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
 
                 if (!isOpen) {
                     target.classList.add('open');
-                    if (rowEl) rowEl.classList.add('active');
+                    rowEl.classList.add('active');
                 }
             }
 
-            function updateIndicators(activeIdx, direction) {
-                const indicators = document.querySelectorAll('.sort-indicator');
-                indicators.forEach((el, idx) => {
-                    if (idx === activeIdx) {
-                        el.textContent = direction === 'asc' ? '↑' : '↓';
-                    } else {
-                        el.textContent = '↕';
-                    }
-                });
-            }
-
-            function sortPipelineTable(colIndex, dataType) {
+            function sortPipelineTable(colIndex, type) {
                 const tbody = document.getElementById('pipelineTbody');
-                if (!tbody) return;
-
-                const mainRows = Array.from(tbody.querySelectorAll('tr.pipeline-row'));
-                const rowPairs = mainRows.map((mainRow) => {
-                    const pairId = mainRow.getAttribute('data-pair');
-                    const detailRow = tbody.querySelector(`tr.detail-row[data-pair="${pairId}"]`);
-                    return { mainRow, detailRow };
+                const rows = Array.from(tbody.querySelectorAll('.pipeline-row'));
+                const pairs = rows.map((row) => {
+                    const pairId = row.getAttribute('data-pair');
+                    const detail = tbody.querySelector(`.detail-row[data-pair="${pairId}"]`);
+                    return { row, detail };
                 });
 
-                if (currentSortColumn === colIndex) {
-                    currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
-                } else {
-                    currentSortColumn = colIndex;
-                    currentSortDirection = 'asc';
-                }
+                const direction = (currentSortColumn === colIndex && currentSortDirection === 'asc') ? 'desc' : 'asc';
+                currentSortColumn = colIndex;
+                currentSortDirection = direction;
 
-                rowPairs.forEach((pair) => {
-                    if (pair.detailRow) pair.detailRow.classList.remove('open');
-                    pair.mainRow.classList.remove('active');
-                });
+                pairs.sort((a, b) => {
+                    const aCell = a.row.children[colIndex];
+                    const bCell = b.row.children[colIndex];
+                    const av = aCell ? aCell.getAttribute('data-sort') || '' : '';
+                    const bv = bCell ? bCell.getAttribute('data-sort') || '' : '';
 
-                rowPairs.sort((a, b) => {
-                    const aCell = a.mainRow.cells[colIndex];
-                    const bCell = b.mainRow.cells[colIndex];
-                    let av = aCell ? (aCell.dataset.sort || aCell.innerText || '') : '';
-                    let bv = bCell ? (bCell.dataset.sort || bCell.innerText || '') : '';
-
-                    if (dataType === 'number') {
-                        av = parseFloat(av || '0');
-                        bv = parseFloat(bv || '0');
-                        if (isNaN(av)) av = 0;
-                        if (isNaN(bv)) bv = 0;
-                    } else {
-                        av = String(av).toLowerCase();
-                        bv = String(bv).toLowerCase();
+                    if (type === 'number') {
+                        const an = parseFloat(av || '0');
+                        const bn = parseFloat(bv || '0');
+                        return direction === 'asc' ? an - bn : bn - an;
                     }
-
-                    if (av < bv) return currentSortDirection === 'asc' ? -1 : 1;
-                    if (av > bv) return currentSortDirection === 'asc' ? 1 : -1;
-                    return 0;
+                    return direction === 'asc'
+                        ? av.localeCompare(bv, 'pt-BR')
+                        : bv.localeCompare(av, 'pt-BR');
                 });
 
-                rowPairs.forEach((pair) => {
-                    tbody.appendChild(pair.mainRow);
-                    if (pair.detailRow) tbody.appendChild(pair.detailRow);
+                pairs.forEach((pair) => {
+                    tbody.appendChild(pair.row);
+                    if (pair.detail) tbody.appendChild(pair.detail);
                 });
 
-                updateIndicators(colIndex, currentSortDirection);
+                document.querySelectorAll('.sort-indicator').forEach((el) => el.textContent = '↕');
+                const active = document.getElementById(`sort-indicator-${colIndex}`);
+                if (active) active.textContent = direction === 'asc' ? '↑' : '↓';
             }
         </script>
         """
     )
-    return "".join(parts)
-
+    return ''.join(parts)
 
 def render_brand_header():
     st.markdown(
