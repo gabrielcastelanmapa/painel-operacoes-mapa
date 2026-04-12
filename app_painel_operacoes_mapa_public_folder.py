@@ -1,7 +1,10 @@
 import re
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from html import escape
+from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import plotly.express as px
@@ -14,6 +17,8 @@ st.set_page_config(page_title="Painel de Operações | MAPA", layout="wide")
 PUBLIC_FOLDER_URL = "https://drive.google.com/drive/folders/1zEHRpVyvHQ8PQve2RWhJRYqgVpjvymUf?usp=sharing"
 PUBLIC_FOLDER_ID = "1zEHRpVyvHQ8PQve2RWhJRYqgVpjvymUf"
 PUBLIC_FILENAME_CONTAINS = "Pipeline"
+DOCUMENT_CONTROL_FILENAME_CONTAINS = "Gestão de Contratos e Obrigações"
+DOCUMENT_CONTROL_GOOGLE_SHEETS_URL = "https://docs.google.com/spreadsheets/d/1toWx70eLUNogXmCYmIaFd6GqxDhgFCGb/edit?usp=sharing&ouid=109574043470164369926&rtpof=true&sd=true"
 EXTENSOES_VALIDAS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
 MAPA_NAVY = "#05104E"
@@ -107,6 +112,15 @@ def inject_brand_css():
 
         [data-testid="stHeader"] {{
             background: rgba(255,255,255,0.0);
+        }}
+
+        [data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, rgba(247,251,252,0.98), rgba(255,255,255,0.98));
+            border-right: 1px solid rgba(183,214,226,0.75);
+        }}
+
+        [data-testid="stSidebar"] .block-container {{
+            padding-top: 1.1rem;
         }}
 
         #MainMenu, footer {{
@@ -1535,129 +1549,674 @@ def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: s
         )
 
 
-drive_error = None
-fonte_dados = "Google Drive público"
-arquivos_excel = []
 
-try:
-    arquivos_excel = listar_arquivos_excel()
-except FileNotFoundError as exc:
-    drive_error = str(exc)
-    arquivos_excel = listar_arquivos_excel_locais()
+
+
+def extract_google_sheet_id(sheet_url: str) -> str:
+    if not sheet_url:
+        return ""
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", str(sheet_url))
+    return match.group(1) if match else ""
+
+
+def build_google_sheet_export_xlsx_url(sheet_url: str) -> str:
+    sheet_id = extract_google_sheet_id(sheet_url)
+    if not sheet_id:
+        raise ValueError("Não foi possível identificar o ID da planilha do Google Sheets.")
+    parsed = urlparse(sheet_url)
+    query = parse_qs(parsed.query)
+    gid = query.get("gid", ["0"])[0]
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx&gid={gid}"
+
+
+def download_google_sheet_excel_bytes(sheet_url: str, timeout: int = 30) -> bytes:
+    export_url = build_google_sheet_export_xlsx_url(sheet_url)
+    request = Request(
+        export_url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        content = response.read()
+    if not content:
+        raise ValueError("A exportação da planilha retornou um arquivo vazio.")
+    return content
+
+
+def carregar_documentos_google_sheets(sheet_url: str):
+    file_bytes = download_google_sheet_excel_bytes(sheet_url)
+    df_docs = parse_document_control_excel_from_bytes(file_bytes, "gestao_contratos_obrigacoes_google.xlsx")
+    legenda_df = parse_document_legendas_from_bytes(file_bytes, "gestao_contratos_obrigacoes_google.xlsx")
+    return df_docs, legenda_df
+
+
+def listar_arquivos_documentos_locais(
+    base_dir: Path | None = None,
+    filename_contains: str = DOCUMENT_CONTROL_FILENAME_CONTAINS,
+):
+    resolved_base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+    name_filter = (filename_contains or "").strip().lower()
+
+    arquivos = []
+    vistos = set()
+    for path in resolved_base.rglob("*"):
+        try:
+            if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
+                continue
+        except Exception:
+            continue
+        if name_filter and name_filter not in path.name.lower():
+            continue
+        resolved = str(path.resolve())
+        if resolved in vistos:
+            continue
+        vistos.add(resolved)
+        arquivos.append(path)
+
+    arquivos.sort(key=lambda p: (p.name.lower(), str(p).lower()))
+    return arquivos
+
+
+def parse_document_control_excel_from_path(path: str | Path):
+    excel_path = Path(path)
+    workbook = pd.ExcelFile(excel_path)
+    target_sheet = "Gestão de Obrigações" if "Gestão de Obrigações" in workbook.sheet_names else workbook.sheet_names[0]
+    raw = pd.read_excel(excel_path, sheet_name=target_sheet, header=1)
+
+    rename_map = {
+        "Unnamed: 0": "sequencia",
+        "Prioridade": "prioridade",
+        "Projeto": "projeto",
+        "Data da Inclusão": "data_inclusao",
+        "Nome do Documento": "nome_documento",
+        "Tipo de Documento (Contrato)": "tipo_documento",
+        "Matrícula": "matricula",
+        "Metragem": "metragem",
+        "Valor": "valor",
+        "Responsável": "responsavel",
+        "Status": "status",
+        "Data da Assinatura": "data_assinatura",
+        "Prazo Final": "prazo_final",
+        "Empresa Responsável pelo Cumprimento": "empresa_responsavel_cumprimento",
+        "Empresa na MAPA": "empresa_mapa",
+        "Parte Contrária": "parte_contraria",
+        "Consequência": "consequencia",
+        "Data de Cumprimento": "data_cumprimento",
+        "Dias para o prazo final": "dias_prazo_final",
+        "Observações": "observacoes",
+        "Ação Sugerida": "acao_sugerida",
+    }
+    df = raw.rename(columns=rename_map)
+
+    expected_cols = list(rename_map.values())
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+    df = df[expected_cols].copy()
+
+    text_cols = [
+        "prioridade", "projeto", "nome_documento", "tipo_documento", "matricula", "responsavel", "status",
+        "empresa_responsavel_cumprimento", "empresa_mapa", "parte_contraria", "consequencia", "observacoes", "acao_sugerida",
+    ]
+    for col in text_cols:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    for col in ["sequencia", "metragem", "valor", "prazo_final", "dias_prazo_final"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in ["data_inclusao", "data_assinatura", "data_cumprimento"]:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    df = df[
+        (
+            df[["projeto", "nome_documento", "tipo_documento", "status", "responsavel"]]
+            .fillna("")
+            .astype(str)
+            .agg("".join, axis=1)
+            .str.strip()
+            != ""
+        )
+    ].copy()
+
+    df["prioridade"] = df["prioridade"].replace("", "Não informado")
+    df["status"] = df["status"].replace("", "Não informado")
+    df["responsavel"] = df["responsavel"].replace("", "Não informado")
+    df["tipo_documento"] = df["tipo_documento"].replace("", "Não informado")
+    df["projeto"] = df["projeto"].replace("", "Não informado")
+
+    return df.reset_index(drop=True)
+
+
+def parse_document_control_excel_from_bytes(file_bytes: bytes, file_name: str = "upload_documentos.xlsx"):
+    temp_dir = Path(tempfile.mkdtemp(prefix="mapa_docs_upload_"))
+    temp_path = temp_dir / file_name
+    temp_path.write_bytes(file_bytes)
+    return parse_document_control_excel_from_path(temp_path)
+
+
+def parse_document_legendas_from_bytes(file_bytes: bytes, file_name: str = "upload_documentos.xlsx"):
+    temp_dir = Path(tempfile.mkdtemp(prefix="mapa_docs_legendas_upload_"))
+    temp_path = temp_dir / file_name
+    temp_path.write_bytes(file_bytes)
+    return parse_document_legendas_from_path(temp_path)
+
+
+def parse_document_legendas_from_path(path: str | Path):
+    excel_path = Path(path)
+    workbook = pd.ExcelFile(excel_path)
+    if "Legendas" not in workbook.sheet_names:
+        return pd.DataFrame()
+    legenda = pd.read_excel(excel_path, sheet_name="Legendas")
+    legenda = legenda.dropna(how="all").reset_index(drop=True)
+    return legenda
+
+
+def format_date_br(value):
+    data = pd.to_datetime(value, errors="coerce")
+    if pd.notna(data):
+        return data.strftime("%d/%m/%Y")
+    txt = str(value).strip() if value is not None else ""
+    return txt if txt else "—"
+
+
+def format_int_br(value):
+    if value is None or pd.isna(value):
+        return "—"
+    try:
+        return f"{int(round(float(value))):,}".replace(",", ".")
+    except Exception:
+        return "—"
+
+
+def faixa_prazo_documento(value):
+    if value is None or pd.isna(value):
+        return "Sem prazo"
+    try:
+        dias = float(value)
+    except Exception:
+        return "Sem prazo"
+    if dias < 0:
+        return "Vencido"
+    if dias <= 30:
+        return "0-30 dias"
+    if dias <= 90:
+        return "31-90 dias"
+    return "91+ dias"
+
+
+def render_document_filter_block(df_base: pd.DataFrame, key_prefix: str = "docs"):
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-head"><h3 class="section-title">Filtros | Controle de Documentos</h3><p class="section-note">Os filtros abaixo impactam métricas, gráficos e tabela da gestão de obrigações.</p></div>', unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        projeto_sel = st.multiselect("Projeto", options=make_options(df_base["projeto"]), key=f"{key_prefix}_projeto")
+    with c2:
+        prioridade_sel = st.multiselect("Prioridade", options=order_categories(df_base["prioridade"].tolist()), key=f"{key_prefix}_prioridade")
+    with c3:
+        status_sel = st.multiselect("Status", options=order_categories(df_base["status"].tolist()), key=f"{key_prefix}_status")
+    with c4:
+        tipo_sel = st.multiselect("Tipo de Documento", options=make_options(df_base["tipo_documento"]), key=f"{key_prefix}_tipo")
+
+    c5, c6 = st.columns(2)
+    with c5:
+        responsavel_sel = st.multiselect("Responsável", options=make_options(df_base["responsavel"]), key=f"{key_prefix}_responsavel")
+    with c6:
+        faixa_sel = st.multiselect(
+            "Faixa de prazo",
+            options=["Vencido", "0-30 dias", "31-90 dias", "91+ dias", "Sem prazo"],
+            key=f"{key_prefix}_faixa_prazo",
+        )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    mask = pd.Series(True, index=df_base.index)
+    mask &= apply_multiselect_filter(df_base["projeto"], projeto_sel)
+    mask &= apply_multiselect_filter(df_base["prioridade"], prioridade_sel)
+    mask &= apply_multiselect_filter(df_base["status"], status_sel)
+    mask &= apply_multiselect_filter(df_base["tipo_documento"], tipo_sel)
+    mask &= apply_multiselect_filter(df_base["responsavel"], responsavel_sel)
+    if faixa_sel:
+        faixa_series = df_base["dias_prazo_final"].apply(faixa_prazo_documento)
+        mask &= faixa_series.isin(faixa_sel)
+
+    return df_base.loc[mask].reset_index(drop=True).copy()
+
+
+def render_document_metric_cards(df_filtrado: pd.DataFrame):
+    total_documentos = len(df_filtrado)
+    alta_prioridade = df_filtrado["prioridade"].fillna("").astype(str).str.contains(r"^1", regex=True).sum()
+    vencidos = (pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce") < 0).sum()
+    proximos_30 = pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce").between(0, 30, inclusive="both").sum()
+    valor_total = pd.to_numeric(df_filtrado["valor"], errors="coerce").fillna(0).sum()
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.markdown(metric_card("Nº de Documentos", f"{total_documentos}", "Quantidade no recorte filtrado"), unsafe_allow_html=True)
+    with m2:
+        st.markdown(metric_card("Alta Prioridade", f"{int(alta_prioridade)}", "Prioridade 1 - Alta"), unsafe_allow_html=True)
+    with m3:
+        st.markdown(metric_card("Vencidos", f"{int(vencidos)}", "Dias para o prazo final abaixo de zero"), unsafe_allow_html=True)
+    with m4:
+        st.markdown(metric_card("Até 30 dias", f"{int(proximos_30)}", "Prazos críticos no curto prazo"), unsafe_allow_html=True)
+    with m5:
+        st.markdown(metric_card("Valor Total", format_brl(valor_total), "Soma do valor associado aos documentos"), unsafe_allow_html=True)
+
+
+def render_document_charts(df_filtrado: pd.DataFrame):
+    if df_filtrado.empty:
+        render_empty_state("Controle de Documentos", "Nenhum documento encontrado para os filtros atuais.")
+        return
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    gc1, gc2 = st.columns(2)
+    with gc1:
+        base_status = df_filtrado.groupby("status", dropna=False).size().reset_index(name="quantidade")
+        base_status["status"] = base_status["status"].apply(normalize_category_text)
+        status_order = order_categories(base_status["status"].tolist())
+        base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
+        base_status = base_status.sort_values("status")
+        fig_status = px.bar(base_status, x="status", y="quantidade", title="Documentos por status", text_auto=True, color_discrete_sequence=[MAPA_TEAL], category_orders={"status": status_order})
+        fig_status.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_status, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with gc2:
+        base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+        fig_resp = px.bar(base_resp, x="responsavel", y="quantidade", title="Documentos por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
+        fig_resp.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_resp, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    gc3, gc4 = st.columns(2)
+    with gc3:
+        base_prio = df_filtrado.groupby("prioridade", dropna=False).size().reset_index(name="quantidade")
+        base_prio["prioridade"] = base_prio["prioridade"].apply(normalize_category_text)
+        prio_order = order_categories(base_prio["prioridade"].tolist())
+        base_prio["prioridade"] = pd.Categorical(base_prio["prioridade"], categories=prio_order, ordered=True)
+        base_prio = base_prio.sort_values("prioridade")
+        fig_prio = px.bar(base_prio, x="prioridade", y="quantidade", title="Documentos por prioridade", text_auto=True, color_discrete_sequence=[MAPA_DARK_TEAL], category_orders={"prioridade": prio_order})
+        fig_prio.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_prio, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with gc4:
+        prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
+        base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
+        faixa_order = ["Vencido", "0-30 dias", "31-90 dias", "91+ dias", "Sem prazo"]
+        base_prazo["faixa_prazo"] = pd.Categorical(base_prazo["faixa_prazo"], categories=faixa_order, ordered=True)
+        base_prazo = base_prazo.sort_values("faixa_prazo")
+        fig_prazo = px.bar(base_prazo, x="faixa_prazo", y="quantidade", title="Documentos por faixa de prazo", text_auto=True, color_discrete_sequence=[MAPA_TEAL_2], category_orders={"faixa_prazo": faixa_order})
+        fig_prazo.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_prazo, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_document_table(df_filtrado: pd.DataFrame, legenda_df: pd.DataFrame | None = None):
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Controle de Documentos | Base detalhada</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Tabela detalhada das obrigações filtradas, com possibilidade de exportação em CSV.</p>', unsafe_allow_html=True)
+
+    csv = df_filtrado.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="Baixar CSV | Controle de Documentos",
+        data=csv,
+        file_name="controle_documentos_filtrado.csv",
+        mime="text/csv",
+        key="download_documentos_csv",
+    )
+
+    display_df = df_filtrado.copy()
+    for col in ["data_inclusao", "data_assinatura", "data_cumprimento"]:
+        display_df[col] = display_df[col].apply(format_date_br)
+    display_df["valor"] = display_df["valor"].apply(lambda x: format_brl(x) if pd.notna(x) and float(x) != 0 else "—")
+    display_df["metragem"] = display_df["metragem"].apply(format_int_br)
+    display_df["prazo_final"] = display_df["prazo_final"].apply(format_int_br)
+    display_df["dias_prazo_final"] = display_df["dias_prazo_final"].apply(format_int_br)
+    display_df["sequencia"] = display_df["sequencia"].apply(format_int_br)
+
+    table_columns = [
+        "sequencia", "prioridade", "projeto", "nome_documento", "tipo_documento", "responsavel", "status",
+        "data_assinatura", "data_cumprimento", "dias_prazo_final", "valor", "consequencia", "observacoes", "acao_sugerida",
+    ]
+    rename_columns = {
+        "sequencia": "#",
+        "prioridade": "Prioridade",
+        "projeto": "Projeto",
+        "nome_documento": "Nome do Documento",
+        "tipo_documento": "Tipo de Documento",
+        "responsavel": "Responsável",
+        "status": "Status",
+        "data_assinatura": "Data da Assinatura",
+        "data_cumprimento": "Data de Cumprimento",
+        "dias_prazo_final": "Dias para o prazo final",
+        "valor": "Valor",
+        "consequencia": "Consequência",
+        "observacoes": "Observações",
+        "acao_sugerida": "Ação Sugerida",
+    }
+    st.dataframe(display_df[table_columns].rename(columns=rename_columns), use_container_width=True, hide_index=True, height=620)
+
+    if legenda_df is not None and not legenda_df.empty:
+        with st.expander("Legendas da planilha", expanded=False):
+            st.dataframe(legenda_df, use_container_width=True, hide_index=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_sidebar_menu():
+    with st.sidebar:
+        st.markdown("### Menu")
+        sessao = st.radio(
+            "Sessão",
+            options=["Operações", "Controle de Documentos"],
+            index=0,
+            key="sidebar_sessao_mapa",
+        )
+        subsessao = None
+        if sessao == "Operações":
+            st.markdown("#### Subsessões")
+            subsessao = st.radio(
+                "Operações",
+                options=["Top Five", "Secundárias", "Consolidado"],
+                index=0,
+                key="sidebar_subsessao_operacoes",
+            )
+        st.caption("Use o menu lateral para alternar entre o painel comercial e o controle de documentos.")
+    return sessao, subsessao
+
+
+def render_operations_section(visao_painel: str):
+    drive_error = None
+    fonte_dados = "Google Drive público"
+    arquivos_excel = []
+
+    try:
+        arquivos_excel = listar_arquivos_excel()
+    except FileNotFoundError as exc:
+        drive_error = str(exc)
+        arquivos_excel = listar_arquivos_excel_locais()
+        if arquivos_excel:
+            fonte_dados = "Arquivos locais do repositório"
+
+    st.markdown(
+        """
+        <div class="section-card">
+            <div class="section-head">
+                <h3 class="section-title">Arquivos carregados</h3>
+                <p class="section-note">Selecione a planilha manualmente ou mantenha a leitura automática do arquivo mais recente. Se o Google Drive público falhar, o painel tenta usar arquivos locais ou uma planilha enviada manualmente.</p>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if drive_error:
+        st.warning(f"Google Drive público indisponível no momento. {drive_error}")
+
+    arquivo_escolhido = None
+    arquivo_upload = None
+
     if arquivos_excel:
-        fonte_dados = "Arquivos locais do repositório"
+        nomes_arquivos = [a.name for a in arquivos_excel]
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            arquivo_escolhido_nome = st.selectbox("Selecione a planilha", options=nomes_arquivos, index=0, key="pipeline_file_select")
+        with col_b:
+            usar_mais_recente = st.checkbox("Usar mais recente", value=True, key="pipeline_use_latest")
 
-st.markdown(
-    """
-    <div class="section-card">
-        <div class="section-head">
-            <h3 class="section-title">Arquivos carregados</h3>
-            <p class="section-note">Selecione a planilha manualmente ou mantenha a leitura automática do arquivo mais recente. Se o Google Drive público falhar, o painel tenta usar arquivos locais ou uma planilha enviada manualmente.</p>
-        </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if drive_error:
-    st.warning(f"Google Drive público indisponível no momento. {drive_error}")
-
-arquivo_escolhido = None
-arquivo_upload = None
-
-if arquivos_excel:
-    nomes_arquivos = [a.name for a in arquivos_excel]
-    col_a, col_b = st.columns([3, 1])
-    with col_a:
-        arquivo_escolhido_nome = st.selectbox("Selecione a planilha", options=nomes_arquivos, index=0)
-    with col_b:
-        usar_mais_recente = st.checkbox("Usar mais recente", value=True)
-
-    if usar_mais_recente:
-        arquivo_escolhido = arquivos_excel[0]
+        if usar_mais_recente:
+            arquivo_escolhido = arquivos_excel[0]
+        else:
+            arquivo_escolhido = next(a for a in arquivos_excel if a.name == arquivo_escolhido_nome)
     else:
-        arquivo_escolhido = next(a for a in arquivos_excel if a.name == arquivo_escolhido_nome)
-else:
-    arquivo_upload = st.file_uploader(
-        "Envie a planilha Pipeline",
-        type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
-        help="Use esta opção quando o Google Drive público não estiver acessível.",
-    )
-    if arquivo_upload is not None:
-        fonte_dados = "Upload manual"
+        arquivo_upload = st.file_uploader(
+            "Envie a planilha Pipeline",
+            type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+            help="Use esta opção quando o Google Drive público não estiver acessível.",
+            key="pipeline_uploader_manual",
+        )
+        if arquivo_upload is not None:
+            fonte_dados = "Upload manual"
 
-arquivo_label = arquivo_escolhido.name if arquivo_escolhido else (arquivo_upload.name if arquivo_upload else "Nenhum arquivo selecionado")
+    arquivo_label = arquivo_escolhido.name if arquivo_escolhido else (arquivo_upload.name if arquivo_upload else "Nenhum arquivo selecionado")
 
-st.markdown(
-    f"""
-    <div class="meta-bar" style="margin-top:10px;">
-        <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
-        <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
-    </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if arquivo_escolhido is None and arquivo_upload is None:
-    st.error("Nenhum arquivo Excel pôde ser carregado automaticamente. Envie a planilha manualmente ou revise o link/permissão da pasta pública do Google Drive.")
-    st.stop()
-
-try:
-    if arquivo_escolhido is not None:
-        df = parse_pipeline_excel_from_path(arquivo_escolhido)
-    else:
-        df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
-except Exception as e:
-    st.error(f"Erro ao ler a planilha: {e}")
-    st.stop()
-
-if df.empty:
-    st.warning("Nenhum registro válido foi encontrado na aba 'Pipeline'.")
-    st.stop()
-
-st.markdown(
-    """
-    <div class="section-card">
-        <div class="section-head">
-            <h3 class="section-title">Navegação do painel</h3>
-            <p class="section-note">Escolha a visão inicial Top Five, depois Secundárias e, por fim, o Consolidado.</p>
+    st.markdown(
+        f"""
+        <div class="meta-bar" style="margin-top:10px;">
+            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
+            <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
         </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-visao_painel = st.radio(
-    "Página",
-    options=["Top Five", "Secundárias", "Consolidado"],
-    horizontal=True,
-    index=0,
-    key="visao_painel_operacoes",
-    label_visibility="collapsed",
-)
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-if visao_painel == "Consolidado":
-    render_dashboard_page(
-        df_page_base=df.copy(),
-        key_prefix="consolidado",
-        escopo="consolidado",
-        filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
-        page_mode="consolidado",
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-elif visao_painel == "Top Five":
-    render_dashboard_page(
-        df_page_base=df[is_top_five(df["top_five"])].copy(),
-        key_prefix="top_five",
-        escopo="Top Five",
-        filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
-        page_mode="top_five",
+
+    if arquivo_escolhido is None and arquivo_upload is None:
+        st.error("Nenhum arquivo Excel pôde ser carregado automaticamente. Envie a planilha manualmente ou revise o link/permissão da pasta pública do Google Drive.")
+        return
+
+    try:
+        if arquivo_escolhido is not None:
+            df = parse_pipeline_excel_from_path(arquivo_escolhido)
+        else:
+            df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
+    except Exception as e:
+        st.error(f"Erro ao ler a planilha: {e}")
+        return
+
+    if df.empty:
+        st.warning("Nenhum registro válido foi encontrado na aba 'Pipeline'.")
+        return
+
+    st.markdown(
+        """
+        <div class="section-card">
+            <div class="section-head">
+                <h3 class="section-title">Operações</h3>
+                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias e Consolidado.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+
+    if visao_painel == "Consolidado":
+        render_dashboard_page(
+            df_page_base=df.copy(),
+            key_prefix="consolidado",
+            escopo="consolidado",
+            filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
+            page_mode="consolidado",
+        )
+    elif visao_painel == "Top Five":
+        render_dashboard_page(
+            df_page_base=df[is_top_five(df["top_five"])].copy(),
+            key_prefix="top_five",
+            escopo="Top Five",
+            filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
+            page_mode="top_five",
+        )
+    else:
+        render_dashboard_page(
+            df_page_base=df[~is_top_five(df["top_five"])].copy(),
+            key_prefix="secundarias",
+            escopo="Secundárias",
+            filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
+            page_mode="secundarias",
+        )
+
+
+def render_document_control_section():
+    st.markdown(
+        """
+        <div class="section-card">
+            <div class="section-head">
+                <h3 class="section-title">Controle de Documentos</h3>
+                <p class="section-note">Painel de acompanhamento das obrigações contratuais, com leitura automática da planilha de Gestão de Contratos e Obrigações no Google Sheets, com fallback local/upload.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="section-card">
+            <div class="section-head">
+                <h3 class="section-title">Base de documentos</h3>
+                <p class="section-note">A aplicação tenta ler automaticamente a planilha do Google Sheets informada. Se isso falhar, você pode usar um arquivo local do repositório ou enviar uma versão manualmente.</p>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    df_docs = None
+    legenda_df = pd.DataFrame()
+    fonte_docs = "Google Sheets automático"
+    arquivo_doc_label = "Gestão de Contratos e Obrigações | Google Sheets"
+    google_docs_error = None
+
+    try:
+        df_docs, legenda_df = carregar_documentos_google_sheets(DOCUMENT_CONTROL_GOOGLE_SHEETS_URL)
+    except Exception as e:
+        google_docs_error = e
+
+    arquivos_docs = listar_arquivos_documentos_locais(filename_contains=DOCUMENT_CONTROL_FILENAME_CONTAINS)
+    arquivo_doc_upload = None
+    arquivo_doc_escolhido = arquivos_docs[0] if arquivos_docs else None
+
+    if google_docs_error is not None:
+        st.warning(
+            "Leitura automática do Google Sheets indisponível no momento. "
+            f"Detalhe: {google_docs_error}"
+        )
+
+        if arquivos_docs:
+            nomes_docs = [a.name for a in arquivos_docs]
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                arquivo_doc_nome = st.selectbox(
+                    "Selecione a planilha de documentos (fallback local)",
+                    options=nomes_docs,
+                    index=0,
+                    key="docs_file_select",
+                )
+            with col_b:
+                usar_detectado = st.checkbox("Usar detectado", value=True, key="docs_use_detected")
+            if usar_detectado:
+                arquivo_doc_escolhido = arquivos_docs[0]
+            else:
+                arquivo_doc_escolhido = next(a for a in arquivos_docs if a.name == arquivo_doc_nome)
+
+            arquivo_doc_upload = st.file_uploader(
+                "Substituir por upload manual (opcional)",
+                type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+                key="docs_uploader_optional",
+            )
+            if arquivo_doc_upload is not None:
+                fonte_docs = "Upload manual"
+                arquivo_doc_label = arquivo_doc_upload.name
+            else:
+                fonte_docs = "Arquivo local do repositório"
+                arquivo_doc_label = arquivo_doc_escolhido.name if arquivo_doc_escolhido else "Nenhum arquivo selecionado"
+        else:
+            arquivo_doc_upload = st.file_uploader(
+                "Envie a planilha Gestão de Contratos e Obrigações",
+                type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+                key="docs_uploader_manual",
+            )
+            if arquivo_doc_upload is not None:
+                fonte_docs = "Upload manual"
+                arquivo_doc_label = arquivo_doc_upload.name
+            else:
+                fonte_docs = "Google Sheets indisponível"
+                arquivo_doc_label = "Nenhum arquivo selecionado"
+
+        if arquivo_doc_escolhido is None and arquivo_doc_upload is None:
+            st.markdown(
+                f"""
+                <div class="meta-bar" style="margin-top:10px;">
+                    <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
+                    <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_doc_label)}</span>
+                </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.error("Nenhuma planilha de Gestão de Contratos e Obrigações pôde ser carregada automaticamente. Envie a planilha manualmente ou revise o acesso ao Google Sheets.")
+            return
+
+        try:
+            if arquivo_doc_upload is not None:
+                df_docs = parse_document_control_excel_from_bytes(arquivo_doc_upload.getvalue(), arquivo_doc_upload.name)
+                legenda_df = pd.DataFrame()
+            else:
+                df_docs = parse_document_control_excel_from_path(arquivo_doc_escolhido)
+                legenda_df = parse_document_legendas_from_path(arquivo_doc_escolhido)
+        except Exception as e:
+            st.markdown(
+                f"""
+                <div class="meta-bar" style="margin-top:10px;">
+                    <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
+                    <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_doc_label)}</span>
+                </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.error(f"Erro ao ler a planilha de documentos: {e}")
+            return
+    else:
+        with st.expander("Substituir a base automática por um arquivo manual", expanded=False):
+            st.caption("Opcional. Use apenas se quiser sobrescrever a leitura automática do Google Sheets.")
+            arquivo_doc_upload = st.file_uploader(
+                "Envie uma planilha para substituir a leitura automática",
+                type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+                key="docs_uploader_override",
+            )
+            if arquivo_doc_upload is not None:
+                try:
+                    df_docs = parse_document_control_excel_from_bytes(arquivo_doc_upload.getvalue(), arquivo_doc_upload.name)
+                    legenda_df = pd.DataFrame()
+                    fonte_docs = "Upload manual"
+                    arquivo_doc_label = arquivo_doc_upload.name
+                except Exception as e:
+                    st.error(f"Erro ao ler a planilha enviada manualmente: {e}")
+                    return
+
+    st.markdown(
+        f"""
+        <div class="meta-bar" style="margin-top:10px;">
+            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
+            <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_doc_label)}</span>
+        </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if df_docs is None or df_docs.empty:
+        st.warning("Nenhum registro válido foi encontrado na base de Gestão de Obrigações.")
+        return
+
+    df_docs_filtrado = render_document_filter_block(df_docs, key_prefix="documentos")
+    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
+    render_document_metric_cards(df_docs_filtrado)
+    render_document_charts(df_docs_filtrado)
+    render_document_table(df_docs_filtrado, legenda_df=legenda_df)
+
+
+sessao_menu, visao_operacoes_menu = render_sidebar_menu()
+
+if sessao_menu == "Operações":
+    render_operations_section(visao_operacoes_menu or "Top Five")
 else:
-    render_dashboard_page(
-        df_page_base=df[~is_top_five(df["top_five"])].copy(),
-        key_prefix="secundarias",
-        escopo="Secundárias",
-        filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
-        page_mode="secundarias",
-    )
+    render_document_control_section()
