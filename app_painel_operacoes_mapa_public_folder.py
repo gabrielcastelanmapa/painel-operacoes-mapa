@@ -377,19 +377,19 @@ def to_float(value):
 def extrair_probabilidade(chance):
     if not chance:
         return 0.0
-    t = str(chance).lower()
+    t = str(chance).strip().lower()
     if "1" in t and "alta" in t:
-        return 0.75
+        return 0.20
     if "2" in t and ("média" in t or "media" in t):
-        return 0.50
+        return 0.10
     if "3" in t and "baixa" in t:
-        return 0.25
+        return 0.01
     if "alta" in t:
-        return 0.75
+        return 0.20
     if "média" in t or "media" in t:
-        return 0.50
+        return 0.10
     if "baixa" in t:
-        return 0.25
+        return 0.01
     return 0.0
 
 
@@ -445,31 +445,25 @@ def listar_arquivos_excel(
     for attempt in attempts:
         if not attempt["id"] and not attempt["url"]:
             continue
-
         kwargs = {
             "quiet": True,
+            "remaining_ok": True,
             "use_cookies": False,
-            "output": str(cache_dir),
         }
         if attempt["id"]:
             kwargs["id"] = attempt["id"]
         if attempt["url"]:
             kwargs["url"] = attempt["url"]
-
         try:
-            downloaded = gdown.download_folder(**kwargs)
+            try:
+                kwargs["output"] = str(cache_dir)
+                downloaded = gdown.download_folder(**kwargs)
+            except TypeError:
+                kwargs.pop("output", None)
+                downloaded = gdown.download_folder(**kwargs)
             if downloaded:
                 break
-        except TypeError:
-            try:
-                fallback_kwargs = dict(kwargs)
-                fallback_kwargs.pop("output", None)
-                downloaded = gdown.download_folder(**fallback_kwargs)
-                if downloaded:
-                    break
-            except Exception as exc:
-                last_error = exc
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover
             last_error = exc
 
     if not downloaded:
@@ -481,27 +475,24 @@ def listar_arquivos_excel(
 
     arquivos = []
     vistos = set()
-
     for item in downloaded:
         try:
             path = Path(item)
         except Exception:
             continue
-
         if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
             continue
         if name_filter and name_filter.lower() not in path.name.lower():
             continue
-
         resolved = str(path.resolve())
         if resolved in vistos:
             continue
-
         vistos.add(resolved)
         arquivos.append(path)
 
     arquivos.sort(key=infer_sort_key_from_name, reverse=True)
     return arquivos
+
 
 def listar_arquivos_excel_locais(
     base_dir: Path | None = None,
@@ -656,6 +647,7 @@ def parse_pipeline_excel_from_path(file_path: Path):
     df["valor_ponderado"] = df["valor_operacao"].fillna(0) * df["prob_fechamento"]
     df["comissao_mapa"] = df["comissao_mapa"].fillna(0)
     df["comissao_total"] = df["comissao_total"].fillna(0)
+    df["comissao_mapa_ponderada"] = df["comissao_mapa"] * df["prob_fechamento"]
     df["valor_operacao"] = df["valor_operacao"].fillna(0)
     return df
 
@@ -1205,18 +1197,21 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     valor_total = df_filtrado["valor_operacao"].sum()
     valor_ponderado = df_filtrado["valor_ponderado"].sum()
     comissao_mapa_total = df_filtrado["comissao_mapa"].sum()
+    comissao_mapa_ponderada = df_filtrado["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_filtrado.columns else 0
     ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}"), unsafe_allow_html=True)
     with m2:
         st.markdown(metric_card("Valor Total", format_brl(valor_total), f"Volume bruto | {escopo}"), unsafe_allow_html=True)
     with m3:
-        st.markdown(metric_card("Valor Ponderado", format_brl(valor_ponderado), f"Chance de fechamento | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado", format_brl(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
     with m4:
-        st.markdown(metric_card("Comissão MAPA", format_brl(comissao_mapa_total), f"Receita potencial | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Comissão MAPA", format_brl(comissao_mapa_total), f"Receita bruta potencial | {escopo}"), unsafe_allow_html=True)
     with m5:
+        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
+    with m6:
         st.markdown(metric_card("Ticket Médio", format_brl(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
 
 
