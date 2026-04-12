@@ -445,25 +445,33 @@ def listar_arquivos_excel(
     for attempt in attempts:
         if not attempt["id"] and not attempt["url"]:
             continue
+
         kwargs = {
             "quiet": True,
-            "remaining_ok": True,
             "use_cookies": False,
         }
         if attempt["id"]:
             kwargs["id"] = attempt["id"]
         if attempt["url"]:
             kwargs["url"] = attempt["url"]
+
         try:
-            try:
-                kwargs["output"] = str(cache_dir)
-                downloaded = gdown.download_folder(**kwargs)
-            except TypeError:
-                kwargs.pop("output", None)
-                downloaded = gdown.download_folder(**kwargs)
+            # 1) tentativa mais completa
+            try_kwargs = dict(kwargs)
+            try_kwargs["output"] = str(cache_dir)
+            downloaded = gdown.download_folder(**try_kwargs)
             if downloaded:
                 break
-        except Exception as exc:  # pragma: no cover
+        except TypeError as exc:
+            last_error = exc
+            try:
+                # 2) fallback para versões antigas do gdown sem `output`
+                downloaded = gdown.download_folder(**kwargs)
+                if downloaded:
+                    break
+            except Exception as exc2:
+                last_error = exc2
+        except Exception as exc:
             last_error = exc
 
     if not downloaded:
@@ -475,18 +483,22 @@ def listar_arquivos_excel(
 
     arquivos = []
     vistos = set()
+
     for item in downloaded:
         try:
             path = Path(item)
         except Exception:
             continue
+
         if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
             continue
         if name_filter and name_filter.lower() not in path.name.lower():
             continue
+
         resolved = str(path.resolve())
         if resolved in vistos:
             continue
+
         vistos.add(resolved)
         arquivos.append(path)
 
