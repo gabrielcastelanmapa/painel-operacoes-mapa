@@ -494,6 +494,47 @@ def listar_arquivos_excel(
     return arquivos
 
 
+def listar_arquivos_excel_locais(
+    base_dir: Path | None = None,
+    filename_contains: str = PUBLIC_FILENAME_CONTAINS,
+):
+    resolved_base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+    name_filter = (filename_contains or "").strip().lower()
+
+    arquivos = []
+    vistos = set()
+    for path in resolved_base.rglob("*"):
+        try:
+            if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
+                continue
+        except Exception:
+            continue
+        if name_filter and name_filter not in path.name.lower():
+            continue
+        resolved = str(path.resolve())
+        if resolved in vistos:
+            continue
+        vistos.add(resolved)
+        arquivos.append(path)
+
+    arquivos.sort(key=infer_sort_key_from_name, reverse=True)
+    return arquivos
+
+
+def parse_pipeline_excel_from_bytes(file_bytes: bytes, file_name: str = "upload.xlsx"):
+    suffix = Path(file_name).suffix or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = Path(tmp.name)
+    try:
+        return parse_pipeline_excel_from_path(tmp_path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def parse_pipeline_excel_from_path(file_path: Path):
     wb = load_workbook(filename=str(file_path), data_only=True)
     if "Pipeline" not in wb.sheetnames:
@@ -1478,47 +1519,78 @@ def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: s
         )
 
 
-arquivos_excel = listar_arquivos_excel()
-if not arquivos_excel:
-    st.warning("Nenhum arquivo Excel compatível foi encontrado na pasta pública do Google Drive.")
-    st.stop()
+drive_error = None
+fonte_dados = "Google Drive público"
+arquivos_excel = []
 
-nomes_arquivos = [a.name for a in arquivos_excel]
+try:
+    arquivos_excel = listar_arquivos_excel()
+except FileNotFoundError as exc:
+    drive_error = str(exc)
+    arquivos_excel = listar_arquivos_excel_locais()
+    if arquivos_excel:
+        fonte_dados = "Arquivos locais do repositório"
 
 st.markdown(
     """
     <div class="section-card">
         <div class="section-head">
             <h3 class="section-title">Arquivos carregados</h3>
-            <p class="section-note">Selecione a planilha manualmente ou mantenha a leitura automática do arquivo mais recente na pasta pública do Google Drive.</p>
+            <p class="section-note">Selecione a planilha manualmente ou mantenha a leitura automática do arquivo mais recente. Se o Google Drive público falhar, o painel tenta usar arquivos locais ou uma planilha enviada manualmente.</p>
         </div>
     """,
     unsafe_allow_html=True,
 )
-col_a, col_b = st.columns([3, 1])
-with col_a:
-    arquivo_escolhido_nome = st.selectbox("Selecione a planilha", options=nomes_arquivos, index=0)
-with col_b:
-    usar_mais_recente = st.checkbox("Usar mais recente", value=True)
 
-if usar_mais_recente:
-    arquivo_escolhido = arquivos_excel[0]
+if drive_error:
+    st.warning(f"Google Drive público indisponível no momento. {drive_error}")
+
+arquivo_escolhido = None
+arquivo_upload = None
+
+if arquivos_excel:
+    nomes_arquivos = [a.name for a in arquivos_excel]
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        arquivo_escolhido_nome = st.selectbox("Selecione a planilha", options=nomes_arquivos, index=0)
+    with col_b:
+        usar_mais_recente = st.checkbox("Usar mais recente", value=True)
+
+    if usar_mais_recente:
+        arquivo_escolhido = arquivos_excel[0]
+    else:
+        arquivo_escolhido = next(a for a in arquivos_excel if a.name == arquivo_escolhido_nome)
 else:
-    arquivo_escolhido = next(a for a in arquivos_excel if a.name == arquivo_escolhido_nome)
+    arquivo_upload = st.file_uploader(
+        "Envie a planilha Pipeline",
+        type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+        help="Use esta opção quando o Google Drive público não estiver acessível.",
+    )
+    if arquivo_upload is not None:
+        fonte_dados = "Upload manual"
+
+arquivo_label = arquivo_escolhido.name if arquivo_escolhido else (arquivo_upload.name if arquivo_upload else "Nenhum arquivo selecionado")
 
 st.markdown(
     f"""
     <div class="meta-bar" style="margin-top:10px;">
-        <span class="meta-pill"><span class="dot"></span>Fonte: Google Drive público</span>
-        <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_escolhido.name)}</span>
+        <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
+        <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
     </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
+if arquivo_escolhido is None and arquivo_upload is None:
+    st.error("Nenhum arquivo Excel pôde ser carregado automaticamente. Envie a planilha manualmente ou revise o link/permissão da pasta pública do Google Drive.")
+    st.stop()
+
 try:
-    df = parse_pipeline_excel_from_path(arquivo_escolhido)
+    if arquivo_escolhido is not None:
+        df = parse_pipeline_excel_from_path(arquivo_escolhido)
+    else:
+        df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
 except Exception as e:
     st.error(f"Erro ao ler a planilha: {e}")
     st.stop()
