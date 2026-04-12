@@ -1139,7 +1139,15 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
         & apply_multiselect_filter(df_base["operacao"], f_operacao)
         & apply_multiselect_filter(df_base["prioridade"], f_prioridade)
     )
-    return df_base.loc[mask].copy()
+    return df_base.loc[mask].reset_index(drop=True).copy()
+
+
+def build_filtered_dashboard_view(df_filtrado: pd.DataFrame) -> pd.DataFrame:
+    """Garante que métricas, gráficos e tabelas partam exatamente do mesmo recorte filtrado."""
+    if df_filtrado is None:
+        return pd.DataFrame()
+
+    return df_filtrado.reset_index(drop=True).copy()
 
 
 def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
@@ -1439,14 +1447,18 @@ def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: s
     st.markdown('</div>', unsafe_allow_html=True)
 
     df_filtrado = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
-    render_metric_cards(df_filtrado, escopo=escopo)
-    render_charts(df_filtrado)
+    df_visao = build_filtered_dashboard_view(df_filtrado)
+
+    st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
+
+    render_metric_cards(df_visao, escopo=escopo)
+    render_charts(df_visao)
 
     if page_mode == "consolidado":
-        render_consolidated_tables(df_filtrado)
+        render_consolidated_tables(df_visao)
     elif page_mode == "top_five":
         render_operations_table(
-            df_filtrado,
+            df_visao,
             title="Operações | Top Five",
             note="Tabela exclusiva das operações classificadas como Top Five, após a aplicação dos filtros desta página.",
             csv_label="Baixar CSV | Top Five",
@@ -1456,7 +1468,7 @@ def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: s
         )
     else:
         render_operations_table(
-            df_filtrado,
+            df_visao,
             title="Operações | Secundárias",
             note="Tabela exclusiva das operações secundárias, após a aplicação dos filtros desta página.",
             csv_label="Baixar CSV | Secundárias",
