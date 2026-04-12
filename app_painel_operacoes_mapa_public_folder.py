@@ -1,10 +1,7 @@
 import re
 import tempfile
-from io import BytesIO
 from pathlib import Path
 from html import escape
-from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
 
 import pandas as pd
 import plotly.express as px
@@ -18,7 +15,8 @@ PUBLIC_FOLDER_URL = "https://drive.google.com/drive/folders/1zEHRpVyvHQ8PQve2RWh
 PUBLIC_FOLDER_ID = "1zEHRpVyvHQ8PQve2RWhJRYqgVpjvymUf"
 PUBLIC_FILENAME_CONTAINS = "Pipeline"
 DOCUMENT_CONTROL_FILENAME_CONTAINS = "Gestão de Contratos e Obrigações"
-DOCUMENT_CONTROL_GOOGLE_SHEETS_URL = "https://docs.google.com/spreadsheets/d/1toWx70eLUNogXmCYmIaFd6GqxDhgFCGb/edit?usp=sharing&ouid=109574043470164369926&rtpof=true&sd=true"
+DOCUMENT_CONTROL_PUBLIC_FOLDER_URL = PUBLIC_FOLDER_URL
+DOCUMENT_CONTROL_PUBLIC_FOLDER_ID = PUBLIC_FOLDER_ID
 EXTENSOES_VALIDAS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
 MAPA_NAVY = "#05104E"
@@ -1551,47 +1549,6 @@ def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: s
 
 
 
-
-def extract_google_sheet_id(sheet_url: str) -> str:
-    if not sheet_url:
-        return ""
-    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", str(sheet_url))
-    return match.group(1) if match else ""
-
-
-def build_google_sheet_export_xlsx_url(sheet_url: str) -> str:
-    sheet_id = extract_google_sheet_id(sheet_url)
-    if not sheet_id:
-        raise ValueError("Não foi possível identificar o ID da planilha do Google Sheets.")
-    parsed = urlparse(sheet_url)
-    query = parse_qs(parsed.query)
-    gid = query.get("gid", ["0"])[0]
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx&gid={gid}"
-
-
-def download_google_sheet_excel_bytes(sheet_url: str, timeout: int = 30) -> bytes:
-    export_url = build_google_sheet_export_xlsx_url(sheet_url)
-    request = Request(
-        export_url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*",
-        },
-    )
-    with urlopen(request, timeout=timeout) as response:
-        content = response.read()
-    if not content:
-        raise ValueError("A exportação da planilha retornou um arquivo vazio.")
-    return content
-
-
-def carregar_documentos_google_sheets(sheet_url: str):
-    file_bytes = download_google_sheet_excel_bytes(sheet_url)
-    df_docs = parse_document_control_excel_from_bytes(file_bytes, "gestao_contratos_obrigacoes_google.xlsx")
-    legenda_df = parse_document_legendas_from_bytes(file_bytes, "gestao_contratos_obrigacoes_google.xlsx")
-    return df_docs, legenda_df
-
-
 def listar_arquivos_documentos_locais(
     base_dir: Path | None = None,
     filename_contains: str = DOCUMENT_CONTROL_FILENAME_CONTAINS,
@@ -1694,13 +1651,6 @@ def parse_document_control_excel_from_bytes(file_bytes: bytes, file_name: str = 
     temp_path = temp_dir / file_name
     temp_path.write_bytes(file_bytes)
     return parse_document_control_excel_from_path(temp_path)
-
-
-def parse_document_legendas_from_bytes(file_bytes: bytes, file_name: str = "upload_documentos.xlsx"):
-    temp_dir = Path(tempfile.mkdtemp(prefix="mapa_docs_legendas_upload_"))
-    temp_path = temp_dir / file_name
-    temp_path.write_bytes(file_bytes)
-    return parse_document_legendas_from_path(temp_path)
 
 
 def parse_document_legendas_from_path(path: str | Path):
@@ -2060,143 +2010,109 @@ def render_document_control_section():
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Controle de Documentos</h3>
-                <p class="section-note">Painel de acompanhamento das obrigações contratuais, com leitura automática da planilha de Gestão de Contratos e Obrigações no Google Sheets, com fallback local/upload.</p>
+                <p class="section-note">Painel de acompanhamento das obrigações contratuais, usando a mesma lógica da base de Operações: leitura automática de um arquivo Excel na pasta pública do Google Drive, com fallback local/upload.</p>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    drive_error = None
+    fonte_docs = "Google Drive público"
+    arquivos_docs = []
+
+    try:
+        arquivos_docs = listar_arquivos_excel(
+            folder_url=DOCUMENT_CONTROL_PUBLIC_FOLDER_URL,
+            folder_id=DOCUMENT_CONTROL_PUBLIC_FOLDER_ID,
+            filename_contains=DOCUMENT_CONTROL_FILENAME_CONTAINS,
+        )
+    except FileNotFoundError as exc:
+        drive_error = str(exc)
+        arquivos_docs = listar_arquivos_documentos_locais(filename_contains=DOCUMENT_CONTROL_FILENAME_CONTAINS)
+        if arquivos_docs:
+            fonte_docs = "Arquivos locais do repositório"
+
+    arquivo_doc_escolhido = arquivos_docs[0] if arquivos_docs else None
+
     st.markdown(
         """
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Base de documentos</h3>
-                <p class="section-note">A aplicação tenta ler automaticamente a planilha do Google Sheets informada. Se isso falhar, você pode usar um arquivo local do repositório ou enviar uma versão manualmente.</p>
+                <p class="section-note">Mantenha a planilha de Gestão de Contratos e Obrigações em Excel na pasta pública do Google Drive. Se a leitura automática falhar, o painel tenta usar arquivos locais do repositório ou um upload manual.</p>
             </div>
         """,
         unsafe_allow_html=True,
     )
 
-    df_docs = None
-    legenda_df = pd.DataFrame()
-    fonte_docs = "Google Sheets automático"
-    arquivo_doc_label = "Gestão de Contratos e Obrigações | Google Sheets"
-    google_docs_error = None
+    if drive_error:
+        st.warning(f"Google Drive público indisponível no momento. {drive_error}")
 
-    try:
-        df_docs, legenda_df = carregar_documentos_google_sheets(DOCUMENT_CONTROL_GOOGLE_SHEETS_URL)
-    except Exception as e:
-        google_docs_error = e
-
-    arquivos_docs = listar_arquivos_documentos_locais(filename_contains=DOCUMENT_CONTROL_FILENAME_CONTAINS)
     arquivo_doc_upload = None
-    arquivo_doc_escolhido = arquivos_docs[0] if arquivos_docs else None
+    if arquivos_docs:
+        nomes_docs = [a.name for a in arquivos_docs]
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            arquivo_doc_nome = st.selectbox(
+                "Selecione a planilha de documentos",
+                options=nomes_docs,
+                index=0,
+                key="docs_file_select",
+            )
+        with col_b:
+            usar_detectado = st.checkbox("Usar detectado", value=True, key="docs_use_detected")
+        if usar_detectado:
+            arquivo_doc_escolhido = arquivos_docs[0]
+        else:
+            arquivo_doc_escolhido = next(a for a in arquivos_docs if a.name == arquivo_doc_nome)
 
-    if google_docs_error is not None:
-        st.warning(
-            "Leitura automática do Google Sheets indisponível no momento. "
-            f"Detalhe: {google_docs_error}"
+        arquivo_doc_upload = st.file_uploader(
+            "Substituir por upload manual (opcional)",
+            type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+            key="docs_uploader_optional",
+        )
+    else:
+        arquivo_doc_upload = st.file_uploader(
+            "Envie a planilha Gestão de Contratos e Obrigações",
+            type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
+            key="docs_uploader_manual",
         )
 
-        if arquivos_docs:
-            nomes_docs = [a.name for a in arquivos_docs]
-            col_a, col_b = st.columns([3, 1])
-            with col_a:
-                arquivo_doc_nome = st.selectbox(
-                    "Selecione a planilha de documentos (fallback local)",
-                    options=nomes_docs,
-                    index=0,
-                    key="docs_file_select",
-                )
-            with col_b:
-                usar_detectado = st.checkbox("Usar detectado", value=True, key="docs_use_detected")
-            if usar_detectado:
-                arquivo_doc_escolhido = arquivos_docs[0]
-            else:
-                arquivo_doc_escolhido = next(a for a in arquivos_docs if a.name == arquivo_doc_nome)
+    if arquivo_doc_escolhido is None and arquivo_doc_upload is None:
+        st.markdown(
+            f"""
+            <div class="meta-bar" style="margin-top:10px;">
+                <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
+                <span class="meta-pill"><span class="dot"></span>Arquivo carregado: Nenhum arquivo selecionado</span>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.error("Nenhuma planilha de Gestão de Contratos e Obrigações pôde ser carregada automaticamente. Envie a planilha manualmente ou revise o nome/permissão do arquivo Excel na pasta pública do Google Drive.")
+        return
 
-            arquivo_doc_upload = st.file_uploader(
-                "Substituir por upload manual (opcional)",
-                type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
-                key="docs_uploader_optional",
-            )
-            if arquivo_doc_upload is not None:
-                fonte_docs = "Upload manual"
-                arquivo_doc_label = arquivo_doc_upload.name
-            else:
-                fonte_docs = "Arquivo local do repositório"
-                arquivo_doc_label = arquivo_doc_escolhido.name if arquivo_doc_escolhido else "Nenhum arquivo selecionado"
+    try:
+        if arquivo_doc_upload is not None:
+            df_docs = parse_document_control_excel_from_bytes(arquivo_doc_upload.getvalue(), arquivo_doc_upload.name)
+            legenda_df = pd.DataFrame()
+            fonte_final = "Upload manual"
+            arquivo_final = arquivo_doc_upload.name
         else:
-            arquivo_doc_upload = st.file_uploader(
-                "Envie a planilha Gestão de Contratos e Obrigações",
-                type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
-                key="docs_uploader_manual",
-            )
-            if arquivo_doc_upload is not None:
-                fonte_docs = "Upload manual"
-                arquivo_doc_label = arquivo_doc_upload.name
-            else:
-                fonte_docs = "Google Sheets indisponível"
-                arquivo_doc_label = "Nenhum arquivo selecionado"
-
-        if arquivo_doc_escolhido is None and arquivo_doc_upload is None:
-            st.markdown(
-                f"""
-                <div class="meta-bar" style="margin-top:10px;">
-                    <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
-                    <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_doc_label)}</span>
-                </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.error("Nenhuma planilha de Gestão de Contratos e Obrigações pôde ser carregada automaticamente. Envie a planilha manualmente ou revise o acesso ao Google Sheets.")
-            return
-
-        try:
-            if arquivo_doc_upload is not None:
-                df_docs = parse_document_control_excel_from_bytes(arquivo_doc_upload.getvalue(), arquivo_doc_upload.name)
-                legenda_df = pd.DataFrame()
-            else:
-                df_docs = parse_document_control_excel_from_path(arquivo_doc_escolhido)
-                legenda_df = parse_document_legendas_from_path(arquivo_doc_escolhido)
-        except Exception as e:
-            st.markdown(
-                f"""
-                <div class="meta-bar" style="margin-top:10px;">
-                    <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
-                    <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_doc_label)}</span>
-                </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.error(f"Erro ao ler a planilha de documentos: {e}")
-            return
-    else:
-        with st.expander("Substituir a base automática por um arquivo manual", expanded=False):
-            st.caption("Opcional. Use apenas se quiser sobrescrever a leitura automática do Google Sheets.")
-            arquivo_doc_upload = st.file_uploader(
-                "Envie uma planilha para substituir a leitura automática",
-                type=[ext.lstrip('.') for ext in sorted(EXTENSOES_VALIDAS)],
-                key="docs_uploader_override",
-            )
-            if arquivo_doc_upload is not None:
-                try:
-                    df_docs = parse_document_control_excel_from_bytes(arquivo_doc_upload.getvalue(), arquivo_doc_upload.name)
-                    legenda_df = pd.DataFrame()
-                    fonte_docs = "Upload manual"
-                    arquivo_doc_label = arquivo_doc_upload.name
-                except Exception as e:
-                    st.error(f"Erro ao ler a planilha enviada manualmente: {e}")
-                    return
+            df_docs = parse_document_control_excel_from_path(arquivo_doc_escolhido)
+            legenda_df = parse_document_legendas_from_path(arquivo_doc_escolhido)
+            fonte_final = fonte_docs
+            arquivo_final = arquivo_doc_escolhido.name
+    except Exception as e:
+        st.error(f"Erro ao ler a planilha de documentos: {e}")
+        return
 
     st.markdown(
         f"""
         <div class="meta-bar" style="margin-top:10px;">
-            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
-            <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_doc_label)}</span>
+            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_final)}</span>
+            <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_final)}</span>
         </div>
         </div>
         """,
