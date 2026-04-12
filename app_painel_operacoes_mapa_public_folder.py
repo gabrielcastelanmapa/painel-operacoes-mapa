@@ -445,25 +445,31 @@ def listar_arquivos_excel(
     for attempt in attempts:
         if not attempt["id"] and not attempt["url"]:
             continue
+
         kwargs = {
             "quiet": True,
-            "remaining_ok": True,
             "use_cookies": False,
+            "output": str(cache_dir),
         }
         if attempt["id"]:
             kwargs["id"] = attempt["id"]
         if attempt["url"]:
             kwargs["url"] = attempt["url"]
+
         try:
-            try:
-                kwargs["output"] = str(cache_dir)
-                downloaded = gdown.download_folder(**kwargs)
-            except TypeError:
-                kwargs.pop("output", None)
-                downloaded = gdown.download_folder(**kwargs)
+            downloaded = gdown.download_folder(**kwargs)
             if downloaded:
                 break
-        except Exception as exc:  # pragma: no cover
+        except TypeError:
+            try:
+                fallback_kwargs = dict(kwargs)
+                fallback_kwargs.pop("output", None)
+                downloaded = gdown.download_folder(**fallback_kwargs)
+                if downloaded:
+                    break
+            except Exception as exc:
+                last_error = exc
+        except Exception as exc:
             last_error = exc
 
     if not downloaded:
@@ -475,24 +481,27 @@ def listar_arquivos_excel(
 
     arquivos = []
     vistos = set()
+
     for item in downloaded:
         try:
             path = Path(item)
         except Exception:
             continue
+
         if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
             continue
         if name_filter and name_filter.lower() not in path.name.lower():
             continue
+
         resolved = str(path.resolve())
         if resolved in vistos:
             continue
+
         vistos.add(resolved)
         arquivos.append(path)
 
     arquivos.sort(key=infer_sort_key_from_name, reverse=True)
     return arquivos
-
 
 def listar_arquivos_excel_locais(
     base_dir: Path | None = None,
