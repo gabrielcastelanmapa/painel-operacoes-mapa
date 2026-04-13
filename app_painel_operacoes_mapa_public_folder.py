@@ -762,6 +762,14 @@ def format_brl(valor):
         return "R$ 0,00"
 
 
+def format_brl_card(valor):
+    try:
+        valor = 0 if valor is None else round(float(valor))
+        return f"R$ {valor:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0"
+
+
 def nl2br(text):
     if text is None:
         return "—"
@@ -1318,15 +1326,15 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     with m1:
         st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}"), unsafe_allow_html=True)
     with m2:
-        st.markdown(metric_card("Valor Total", format_brl(valor_total), f"Volume bruto | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Total", format_brl_card(valor_total), f"Volume bruto | {escopo}"), unsafe_allow_html=True)
     with m3:
-        st.markdown(metric_card("Valor Ponderado", format_brl(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado", format_brl_card(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
     with m4:
-        st.markdown(metric_card("Comissão MAPA", format_brl(comissao_mapa_total), f"Receita bruta potencial | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}"), unsafe_allow_html=True)
     with m5:
-        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
     with m6:
-        st.markdown(metric_card("Ticket Médio", format_brl(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
 
 
 def render_empty_state(title: str, message: str):
