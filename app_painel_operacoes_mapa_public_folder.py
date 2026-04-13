@@ -1319,10 +1319,9 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     valor_total = df_filtrado["valor_operacao"].sum()
     valor_ponderado = df_filtrado["valor_ponderado"].sum()
     comissao_mapa_total = df_filtrado["comissao_mapa"].sum()
-    comissao_mapa_ponderada = df_filtrado["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_filtrado.columns else 0
     ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m4, m5 = st.columns(5)
     with m1:
         st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}"), unsafe_allow_html=True)
     with m2:
@@ -1332,8 +1331,6 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     with m4:
         st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}"), unsafe_allow_html=True)
     with m5:
-        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
-    with m6:
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
 
 
