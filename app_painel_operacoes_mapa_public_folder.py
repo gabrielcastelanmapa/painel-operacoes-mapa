@@ -386,6 +386,37 @@ def to_float(value):
         return None
 
 
+def normalize_mandato_value(value) -> str:
+    if value is None:
+        return "BID"
+
+    text = str(value).strip()
+    if not text:
+        return "BID"
+
+    lowered = (
+        text.lower()
+        .replace("ã", "a")
+        .replace("á", "a")
+        .replace("â", "a")
+        .replace("é", "e")
+        .replace("ê", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ô", "o")
+        .replace("ú", "u")
+        .replace("ç", "c")
+    )
+
+    if lowered.startswith("sim"):
+        return "Sim"
+    if lowered.startswith("nao") or lowered.startswith("não"):
+        return "Não"
+    if "bid" in lowered:
+        return "BID"
+    return "BID"
+
+
 def extrair_probabilidade(chance):
     if not chance:
         return 0.0
@@ -663,6 +694,11 @@ def parse_pipeline_excel_from_path(file_path: Path):
             .map({"sim": "Sim", "não": "Não", "nao": "Não"})
             .fillna(df["top_five"])
         )
+
+    if "mandato" in df.columns:
+        df["mandato_filtro"] = df["mandato"].apply(normalize_mandato_value)
+    else:
+        df["mandato_filtro"] = "BID"
 
     if "_historico_datas" in df.columns:
         df = df.drop(columns=["_historico_datas"])
@@ -1162,8 +1198,10 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
     status_options = make_options(df_base["status"])
     operacao_options = make_options(df_base["operacao"])
     prioridade_options = make_options(df_base["prioridade"])
+    mandato_series = df_base["mandato_filtro"] if "mandato_filtro" in df_base.columns else df_base["mandato"].apply(normalize_mandato_value)
+    mandato_options = make_options(mandato_series)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         f_responsavel = st.multiselect(
             "Responsável",
@@ -1196,6 +1234,14 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
             placeholder="Selecione uma ou mais prioridades",
             key=f"{key_prefix}_prioridade",
         )
+    with col5:
+        f_mandato = st.multiselect(
+            "Mandato",
+            mandato_options,
+            default=mandato_options,
+            placeholder="Selecione um ou mais tipos de mandato",
+            key=f"{key_prefix}_mandato",
+        )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1204,6 +1250,7 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
         & apply_multiselect_filter(df_base["status"], f_status)
         & apply_multiselect_filter(df_base["operacao"], f_operacao)
         & apply_multiselect_filter(df_base["prioridade"], f_prioridade)
+        & apply_multiselect_filter(mandato_series, f_mandato)
     )
     return df_base.loc[mask].reset_index(drop=True).copy()
 
