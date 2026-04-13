@@ -15,7 +15,7 @@ PUBLIC_FOLDER_URL = "https://drive.google.com/drive/folders/1zEHRpVyvHQ8PQve2RWh
 PUBLIC_FOLDER_ID = "1zEHRpVyvHQ8PQve2RWhJRYqgVpjvymUf"
 PUBLIC_FILENAME_CONTAINS = "Pipeline"
 DOCUMENT_CONTROL_FILENAME_CONTAINS = "Gestão de Contratos e Obrigações"
-DOCUMENT_CONTROL_PUBLIC_FOLDER_URL = PUBLIC_FOLDER_URL
+DOCUMENT_CONTROL_PUBLIC_FOLDER_URL = "https://drive.google.com/drive/folders/1EflZ12L2cRcmhswb9zT7wBbCml4OosFY?usp=drive_link"
 DOCUMENT_CONTROL_PUBLIC_FOLDER_ID = "1EflZ12L2cRcmhswb9zT7wBbCml4OosFY"
 EXTENSOES_VALIDAS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
@@ -49,6 +49,22 @@ def order_categories(values):
         if normalized and normalized not in present:
             present.append(normalized)
     return sorted(present, key=lambda item: (extract_leading_number(item), item.lower()))
+
+
+def normalize_file_match_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    replacements = {
+        "ã": "a", "á": "a", "â": "a", "à": "a",
+        "é": "e", "ê": "e", "è": "e",
+        "í": "i", "ì": "i",
+        "ó": "o", "ô": "o", "õ": "o", "ò": "o",
+        "ú": "u", "ù": "u",
+        "ç": "c",
+    }
+    for src_char, dst_char in replacements.items():
+        text = text.replace(src_char, dst_char)
+    return " ".join(text.split())
+
 
 OPERATION_COLOR_MAP = {
     "RE - BTS": MAPA_NAVY,
@@ -473,9 +489,10 @@ def listar_arquivos_excel(
 
     resolved_url = (folder_url or "").strip() or PUBLIC_FOLDER_URL
     resolved_id = extract_folder_id(folder_id) or extract_folder_id(resolved_url) or PUBLIC_FOLDER_ID
-    name_filter = (filename_contains or "").strip()
+    name_filter = normalize_file_match_text(filename_contains or "")
 
-    cache_dir = Path(tempfile.gettempdir()) / "mapa_painel_public_folder"
+    folder_key = normalize_file_match_text(resolved_id or resolved_url or "default").replace(" ", "_")
+    cache_dir = Path(tempfile.gettempdir()) / f"mapa_painel_public_folder_{folder_key}"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded = None
@@ -499,7 +516,6 @@ def listar_arquivos_excel(
             kwargs["url"] = attempt["url"]
 
         try:
-            # 1) tentativa mais completa
             try_kwargs = dict(kwargs)
             try_kwargs["output"] = str(cache_dir)
             downloaded = gdown.download_folder(**try_kwargs)
@@ -508,7 +524,6 @@ def listar_arquivos_excel(
         except TypeError as exc:
             last_error = exc
             try:
-                # 2) fallback para versões antigas do gdown sem `output`
                 downloaded = gdown.download_folder(**kwargs)
                 if downloaded:
                     break
@@ -524,8 +539,8 @@ def listar_arquivos_excel(
             "Confira se a pasta está em 'Qualquer pessoa com o link'." + detalhe
         )
 
-    arquivos = []
-    vistos = set()
+    candidatos = []
+    vistos_candidatos = set()
 
     for item in downloaded:
         try:
@@ -533,9 +548,36 @@ def listar_arquivos_excel(
         except Exception:
             continue
 
+        if path.is_file():
+            resolved = str(path.resolve())
+            if resolved not in vistos_candidatos:
+                vistos_candidatos.add(resolved)
+                candidatos.append(path)
+        elif path.is_dir():
+            for child in path.rglob("*"):
+                if child.is_file():
+                    resolved = str(child.resolve())
+                    if resolved not in vistos_candidatos:
+                        vistos_candidatos.add(resolved)
+                        candidatos.append(child)
+
+    if not candidatos:
+        for child in cache_dir.rglob("*"):
+            if child.is_file():
+                resolved = str(child.resolve())
+                if resolved not in vistos_candidatos:
+                    vistos_candidatos.add(resolved)
+                    candidatos.append(child)
+
+    arquivos = []
+    vistos = set()
+
+    for path in candidatos:
         if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
             continue
-        if name_filter and name_filter.lower() not in path.name.lower():
+
+        normalized_name = normalize_file_match_text(path.name)
+        if name_filter and name_filter not in normalized_name:
             continue
 
         resolved = str(path.resolve())
@@ -554,7 +596,7 @@ def listar_arquivos_excel_locais(
     filename_contains: str = PUBLIC_FILENAME_CONTAINS,
 ):
     resolved_base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
-    name_filter = (filename_contains or "").strip().lower()
+    name_filter = normalize_file_match_text(filename_contains or "")
 
     arquivos = []
     vistos = set()
@@ -564,7 +606,8 @@ def listar_arquivos_excel_locais(
                 continue
         except Exception:
             continue
-        if name_filter and name_filter not in path.name.lower():
+        normalized_name = normalize_file_match_text(path.name)
+        if name_filter and name_filter not in normalized_name:
             continue
         resolved = str(path.resolve())
         if resolved in vistos:
@@ -2074,9 +2117,21 @@ def render_document_control_section():
             folder_id=DOCUMENT_CONTROL_PUBLIC_FOLDER_ID,
             filename_contains=DOCUMENT_CONTROL_FILENAME_CONTAINS,
         )
+        if not arquivos_docs:
+            arquivos_docs = listar_arquivos_excel(
+                folder_url=DOCUMENT_CONTROL_PUBLIC_FOLDER_URL,
+                folder_id=DOCUMENT_CONTROL_PUBLIC_FOLDER_ID,
+                filename_contains="",
+            )
+            if arquivos_docs:
+                st.info("Nenhum arquivo correspondeu exatamente ao nome esperado. O painel passou a usar o primeiro arquivo Excel encontrado na pasta de documentos.")
     except FileNotFoundError as exc:
         drive_error = str(exc)
         arquivos_docs = listar_arquivos_documentos_locais(filename_contains=DOCUMENT_CONTROL_FILENAME_CONTAINS)
+        if not arquivos_docs:
+            arquivos_docs = listar_arquivos_documentos_locais(filename_contains="")
+            if arquivos_docs:
+                st.info("Nenhum arquivo local correspondeu exatamente ao nome esperado. O painel passou a usar o primeiro arquivo Excel encontrado no repositório.")
         if arquivos_docs:
             fonte_docs = "Arquivos locais do repositório"
 
