@@ -353,37 +353,6 @@ def to_float(value):
         return None
 
 
-def normalize_mandato_value(value) -> str:
-    if value is None:
-        return "BID"
-
-    text = str(value).strip()
-    if not text:
-        return "BID"
-
-    lowered = (
-        text.lower()
-        .replace("ã", "a")
-        .replace("á", "a")
-        .replace("â", "a")
-        .replace("é", "e")
-        .replace("ê", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ô", "o")
-        .replace("ú", "u")
-        .replace("ç", "c")
-    )
-
-    if lowered.startswith("sim"):
-        return "Sim"
-    if lowered.startswith("nao") or lowered.startswith("não"):
-        return "Não"
-    if "bid" in lowered:
-        return "BID"
-    return "BID"
-
-
 def extrair_probabilidade(chance):
     if not chance:
         return 0.0
@@ -448,25 +417,33 @@ def listar_arquivos_excel(
     for attempt in attempts:
         if not attempt["id"] and not attempt["url"]:
             continue
+
         kwargs = {
             "quiet": True,
-            "remaining_ok": True,
             "use_cookies": False,
         }
         if attempt["id"]:
             kwargs["id"] = attempt["id"]
         if attempt["url"]:
             kwargs["url"] = attempt["url"]
+
         try:
-            try:
-                kwargs["output"] = str(cache_dir)
-                downloaded = gdown.download_folder(**kwargs)
-            except TypeError:
-                kwargs.pop("output", None)
-                downloaded = gdown.download_folder(**kwargs)
+            # 1) tentativa com output definido
+            try_kwargs = dict(kwargs)
+            try_kwargs["output"] = str(cache_dir)
+            downloaded = gdown.download_folder(**try_kwargs)
             if downloaded:
                 break
-        except Exception as exc:  # pragma: no cover
+        except TypeError as exc:
+            last_error = exc
+            try:
+                # 2) fallback para versões do gdown que não aceitam output
+                downloaded = gdown.download_folder(**kwargs)
+                if downloaded:
+                    break
+            except Exception as exc2:
+                last_error = exc2
+        except Exception as exc:
             last_error = exc
 
     if not downloaded:
@@ -478,18 +455,22 @@ def listar_arquivos_excel(
 
     arquivos = []
     vistos = set()
+
     for item in downloaded:
         try:
             path = Path(item)
         except Exception:
             continue
+
         if not path.is_file() or path.suffix.lower() not in EXTENSOES_VALIDAS:
             continue
         if name_filter and name_filter.lower() not in path.name.lower():
             continue
+
         resolved = str(path.resolve())
         if resolved in vistos:
             continue
+
         vistos.add(resolved)
         arquivos.append(path)
 
@@ -574,11 +555,6 @@ def parse_pipeline_excel_from_path(file_path: Path):
             .map({"sim": "Sim", "não": "Não", "nao": "Não"})
             .fillna(df["top_five"])
         )
-
-    if "mandato" in df.columns:
-        df["mandato_filtro"] = df["mandato"].apply(normalize_mandato_value)
-    else:
-        df["mandato_filtro"] = "Em branco"
 
     df["prob_fechamento"] = df["chance_fechamento"].apply(extrair_probabilidade)
     df["valor_ponderado"] = df["valor_operacao"].fillna(0) * df["prob_fechamento"]
@@ -980,359 +956,6 @@ def make_options(series):
 inject_brand_css()
 render_brand_header()
 
-
-def is_top_five(series: pd.Series) -> pd.Series:
-    return series.astype(str).str.strip().str.lower().eq("sim")
-
-
-def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd.DataFrame:
-    st.markdown(
-        f"""
-        <div class="section-card">
-            <div class="section-head">
-                <h3 class="section-title">Filtros executivos</h3>
-                <p class="section-note">{escape(note)}</p>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    responsavel_options = make_options(df_base["responsavel"])
-    status_options = make_options(df_base["status"])
-    operacao_options = make_options(df_base["operacao"])
-    prioridade_options = make_options(df_base["prioridade"])
-    mandato_series = df_base["mandato_filtro"] if "mandato_filtro" in df_base.columns else df_base["mandato"].apply(normalize_mandato_value)
-    mandato_options = make_options(mandato_series)
-
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        f_responsavel = st.multiselect(
-            "Responsável",
-            responsavel_options,
-            default=responsavel_options,
-            placeholder="Selecione um ou mais responsáveis",
-            key=f"{key_prefix}_responsavel",
-        )
-    with col2:
-        f_status = st.multiselect(
-            "Status",
-            status_options,
-            default=status_options,
-            placeholder="Selecione um ou mais status",
-            key=f"{key_prefix}_status",
-        )
-    with col3:
-        f_operacao = st.multiselect(
-            "Operação",
-            operacao_options,
-            default=operacao_options,
-            placeholder="Selecione uma ou mais operações",
-            key=f"{key_prefix}_operacao",
-        )
-    with col4:
-        f_prioridade = st.multiselect(
-            "Prioridade",
-            prioridade_options,
-            default=prioridade_options,
-            placeholder="Selecione uma ou mais prioridades",
-            key=f"{key_prefix}_prioridade",
-        )
-    with col5:
-        f_mandato = st.multiselect(
-            "Mandato",
-            mandato_options,
-            default=mandato_options,
-            placeholder="Selecione um ou mais tipos de mandato",
-            key=f"{key_prefix}_mandato",
-        )
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    mask = (
-        apply_multiselect_filter(df_base["responsavel"], f_responsavel)
-        & apply_multiselect_filter(df_base["status"], f_status)
-        & apply_multiselect_filter(df_base["operacao"], f_operacao)
-        & apply_multiselect_filter(df_base["prioridade"], f_prioridade)
-        & apply_multiselect_filter(mandato_series, f_mandato)
-    )
-    return df_base.loc[mask].copy()
-
-
-def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
-    total_operacoes = len(df_filtrado)
-    valor_total = df_filtrado["valor_operacao"].sum()
-    valor_ponderado = df_filtrado["valor_ponderado"].sum()
-    comissao_mapa_total = df_filtrado["comissao_mapa"].sum()
-    ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
-
-    m1, m2, m3, m4, m5 = st.columns(5)
-    with m1:
-        st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}"), unsafe_allow_html=True)
-    with m2:
-        st.markdown(metric_card("Valor Total", format_brl(valor_total), f"Volume bruto | {escopo}"), unsafe_allow_html=True)
-    with m3:
-        st.markdown(metric_card("Valor Ponderado", format_brl(valor_ponderado), f"Chance de fechamento | {escopo}"), unsafe_allow_html=True)
-    with m4:
-        st.markdown(metric_card("Comissão MAPA", format_brl(comissao_mapa_total), f"Receita potencial | {escopo}"), unsafe_allow_html=True)
-    with m5:
-        st.markdown(metric_card("Ticket Médio", format_brl(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
-
-
-def render_empty_state(title: str, message: str):
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown(f'<h3 class="subheader-inline">{escape(title)}</h3>', unsafe_allow_html=True)
-    st.info(message)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_charts(df_filtrado: pd.DataFrame):
-    if df_filtrado.empty:
-        render_empty_state("Gráficos", "Nenhuma operação encontrada para os filtros atuais.")
-        return
-
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
-    gc1, gc2 = st.columns(2)
-    with gc1:
-        base_status = (
-            df_filtrado.groupby("status", dropna=False)["valor_operacao"]
-            .sum()
-            .reset_index()
-            .sort_values("valor_operacao", ascending=False)
-        )
-        fig_status = px.bar(
-            base_status,
-            x="status",
-            y="valor_operacao",
-            title="Valor por status",
-            text_auto=True,
-            color_discrete_sequence=[MAPA_TEAL],
-        )
-        fig_status.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
-            title_font=dict(size=18, color=MAPA_NAVY),
-            xaxis_title="",
-            yaxis_title="Valor da operação",
-            margin=dict(l=10, r=10, t=50, b=10),
-        )
-        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
-        st.plotly_chart(fig_status, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with gc2:
-        base_resp = (
-            df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"]
-            .sum()
-            .reset_index()
-            .sort_values("valor_operacao", ascending=False)
-        )
-        fig_resp = px.bar(
-            base_resp,
-            x="responsavel",
-            y="valor_operacao",
-            title="Valor por responsável",
-            text_auto=True,
-            color_discrete_sequence=[MAPA_NAVY_2],
-        )
-        fig_resp.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
-            title_font=dict(size=18, color=MAPA_NAVY),
-            xaxis_title="",
-            yaxis_title="Valor da operação",
-            margin=dict(l=10, r=10, t=50, b=10),
-        )
-        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
-        st.plotly_chart(fig_resp, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    gc3, gc4 = st.columns(2)
-    with gc3:
-        base_oper = (
-            df_filtrado.groupby("operacao", dropna=False)["valor_operacao"]
-            .sum()
-            .reset_index()
-            .sort_values("valor_operacao", ascending=False)
-        )
-        fig_oper = px.pie(
-            base_oper,
-            names="operacao",
-            values="valor_operacao",
-            title="Distribuição por tipo de operação",
-            color_discrete_sequence=build_operation_color_sequence(base_oper["operacao"].tolist()),
-            hole=0.42,
-        )
-        fig_oper.update_traces(
-            sort=False,
-            marker=dict(line=dict(color="#FFFFFF", width=2)),
-            textposition="inside",
-            textinfo="percent",
-            hovertemplate="<b>%{label}</b><br>Participação: %{percent}<br>Valor: R$ %{value:,.2f}<extra></extra>",
-        )
-        fig_oper.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
-            title_font=dict(size=18, color=MAPA_NAVY),
-            margin=dict(l=10, r=10, t=50, b=10),
-            legend_title_text="",
-        )
-        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
-        st.plotly_chart(fig_oper, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with gc4:
-        base_chance = (
-            df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"]
-            .sum()
-            .reset_index()
-            .sort_values("valor_operacao", ascending=False)
-        )
-        fig_chance = px.bar(
-            base_chance,
-            x="chance_fechamento",
-            y="valor_operacao",
-            title="Valor por chance de fechamento",
-            text_auto=True,
-            color_discrete_sequence=[MAPA_TEAL_2],
-        )
-        fig_chance.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
-            title_font=dict(size=18, color=MAPA_NAVY),
-            xaxis_title="",
-            yaxis_title="Valor da operação",
-            margin=dict(l=10, r=10, t=50, b=10),
-        )
-        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
-        st.plotly_chart(fig_chance, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    gc5, gc6 = st.columns(2)
-    with gc5:
-        base_qtd_resp = (
-            df_filtrado.groupby("responsavel", dropna=False)
-            .size()
-            .reset_index(name="quantidade_operacoes")
-            .sort_values("quantidade_operacoes", ascending=False)
-        )
-        fig_qtd_resp = px.bar(
-            base_qtd_resp,
-            x="responsavel",
-            y="quantidade_operacoes",
-            title="Quantidade por responsável",
-            text_auto=True,
-            color_discrete_sequence=[MAPA_DARK_TEAL],
-        )
-        fig_qtd_resp.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Montserrat, Arial", color=TEXT_DARK),
-            title_font=dict(size=18, color=MAPA_NAVY),
-            xaxis_title="",
-            yaxis_title="Quantidade de operações",
-            margin=dict(l=10, r=10, t=50, b=10),
-        )
-        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
-        st.plotly_chart(fig_qtd_resp, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with gc6:
-        st.markdown('<div class="chart-box" style="min-height: 120px;"></div>', unsafe_allow_html=True)
-
-def render_operations_table(df_base: pd.DataFrame, title: str, note: str, csv_label: str, csv_file_name: str, empty_message: str, key_prefix: str):
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown(f'<h3 class="subheader-inline">{escape(title)}</h3>', unsafe_allow_html=True)
-    st.markdown(
-        f'<p class="section-note" style="margin-bottom: 10px;">{escape(note)}</p>',
-        unsafe_allow_html=True,
-    )
-
-    csv = df_base.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label=csv_label,
-        data=csv,
-        file_name=csv_file_name,
-        mime="text/csv",
-        key=f"download_{key_prefix}",
-    )
-
-    colunas_tabela = [
-        "top_five", "cliente", "operacao", "prioridade", "status",
-        "responsavel", "chance_fechamento", "valor_operacao", "comissao_total", "comissao_mapa"
-    ]
-    colunas_detalhe = [
-        "resumo", "status_detalhado", "forma_remuneracao", "aprovacao_comite", "mandato", "atualizacao",
-        "link_apresentacao", "link_documentos", "historicos_disponiveis"
-    ]
-
-    base_exibicao = df_base[colunas_tabela + colunas_detalhe].copy()
-
-    if base_exibicao.empty:
-        st.info(empty_message)
-    else:
-        html_table = make_inline_card_table(base_exibicao)
-        height = 220 + max(1, len(base_exibicao)) * 64
-        components.html(html_table, height=min(max(height, 520), 2400), scrolling=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_consolidated_tables(df_filtrado: pd.DataFrame):
-    top_five_mask = is_top_five(df_filtrado["top_five"])
-    render_operations_table(
-        df_filtrado[top_five_mask].copy(),
-        title="Operações | Top Five",
-        note="Tabela exclusiva das operações classificadas como Top Five, com card expansível por clique em qualquer célula da linha.",
-        csv_label="Baixar CSV | Top Five",
-        csv_file_name="painel_operacoes_top_five.csv",
-        empty_message="Nenhuma operação classificada como Top Five para os filtros atuais.",
-        key_prefix="consolidado_top_five",
-    )
-    render_operations_table(
-        df_filtrado[~top_five_mask].copy(),
-        title="Operações | Secundárias",
-        note="Tabela exclusiva das operações que não estão classificadas como Top Five.",
-        csv_label="Baixar CSV | Secundárias",
-        csv_file_name="painel_operacoes_secundarias.csv",
-        empty_message="Nenhuma operação fora do grupo Top Five para os filtros atuais.",
-        key_prefix="consolidado_secundarias",
-    )
-
-
-def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
-    df_filtrado = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
-    render_metric_cards(df_filtrado, escopo=escopo)
-    render_charts(df_filtrado)
-
-    if page_mode == "consolidado":
-        render_consolidated_tables(df_filtrado)
-    elif page_mode == "top_five":
-        render_operations_table(
-            df_filtrado,
-            title="Operações | Top Five",
-            note="Tabela exclusiva das operações classificadas como Top Five, após a aplicação dos filtros desta página.",
-            csv_label="Baixar CSV | Top Five",
-            csv_file_name="painel_operacoes_top_five.csv",
-            empty_message="Nenhuma operação Top Five para os filtros atuais.",
-            key_prefix=f"{key_prefix}_tabela",
-        )
-    else:
-        render_operations_table(
-            df_filtrado,
-            title="Operações | Secundárias",
-            note="Tabela exclusiva das operações secundárias, após a aplicação dos filtros desta página.",
-            csv_label="Baixar CSV | Secundárias",
-            csv_file_name="painel_operacoes_secundarias.csv",
-            empty_message="Nenhuma operação secundária para os filtros atuais.",
-            key_prefix=f"{key_prefix}_tabela",
-        )
-
-
 arquivos_excel = listar_arquivos_excel()
 if not arquivos_excel:
     st.warning("Nenhum arquivo Excel compatível foi encontrado na pasta pública do Google Drive.")
@@ -1386,44 +1009,266 @@ st.markdown(
     """
     <div class="section-card">
         <div class="section-head">
-            <h3 class="section-title">Navegação do painel</h3>
-            <p class="section-note">Escolha a visão consolidada, apenas Top Five ou apenas Secundárias.</p>
+            <h3 class="section-title">Filtros executivos</h3>
+            <p class="section-note">Os filtros abaixo impactam métricas, gráficos e a lista de operações.</p>
         </div>
     """,
     unsafe_allow_html=True,
 )
 
-visao_painel = st.radio(
-    "Página",
-    options=["Consolidado", "Top Five", "Secundárias"],
-    horizontal=True,
-    key="visao_painel_operacoes",
-    label_visibility="collapsed",
-)
+responsavel_options = make_options(df["responsavel"])
+status_options = make_options(df["status"])
+operacao_options = make_options(df["operacao"])
+prioridade_options = make_options(df["prioridade"])
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    f_responsavel = st.multiselect(
+        "Responsável",
+        responsavel_options,
+        default=responsavel_options,
+        placeholder="Selecione um ou mais responsáveis",
+    )
+with col2:
+    f_status = st.multiselect(
+        "Status",
+        status_options,
+        default=status_options,
+        placeholder="Selecione um ou mais status",
+    )
+with col3:
+    f_operacao = st.multiselect(
+        "Operação",
+        operacao_options,
+        default=operacao_options,
+        placeholder="Selecione uma ou mais operações",
+    )
+with col4:
+    f_prioridade = st.multiselect(
+        "Prioridade",
+        prioridade_options,
+        default=prioridade_options,
+        placeholder="Selecione uma ou mais prioridades",
+    )
 
 st.markdown("</div>", unsafe_allow_html=True)
 
-if visao_painel == "Consolidado":
-    render_dashboard_page(
-        df_page_base=df.copy(),
-        key_prefix="consolidado",
-        escopo="consolidado",
-        filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
-        page_mode="consolidado",
+mask = (
+    apply_multiselect_filter(df["responsavel"], f_responsavel)
+    & apply_multiselect_filter(df["status"], f_status)
+    & apply_multiselect_filter(df["operacao"], f_operacao)
+    & apply_multiselect_filter(df["prioridade"], f_prioridade)
+)
+df_filtrado = df.loc[mask].copy()
+
+total_operacoes = len(df_filtrado)
+valor_total = df_filtrado["valor_operacao"].sum()
+valor_ponderado = df_filtrado["valor_ponderado"].sum()
+comissao_mapa_total = df_filtrado["comissao_mapa"].sum()
+ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
+
+m1, m2, m3, m4, m5 = st.columns(5)
+with m1:
+    st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", "Quantidade após filtros"), unsafe_allow_html=True)
+with m2:
+    st.markdown(metric_card("Valor Total", format_brl(valor_total), "Volume bruto consolidado"), unsafe_allow_html=True)
+with m3:
+    st.markdown(metric_card("Valor Ponderado", format_brl(valor_ponderado), "Aplicando chance de fechamento"), unsafe_allow_html=True)
+with m4:
+    st.markdown(metric_card("Comissão MAPA", format_brl(comissao_mapa_total), "Receita potencial da MAPA"), unsafe_allow_html=True)
+with m5:
+    st.markdown(metric_card("Ticket Médio", format_brl(ticket_medio), "Valor médio por operação"), unsafe_allow_html=True)
+
+st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+gc1, gc2 = st.columns(2)
+with gc1:
+    base_status = (
+        df_filtrado.groupby("status", dropna=False)["valor_operacao"]
+        .sum()
+        .reset_index()
+        .sort_values("valor_operacao", ascending=False)
     )
-elif visao_painel == "Top Five":
-    render_dashboard_page(
-        df_page_base=df[is_top_five(df["top_five"])].copy(),
-        key_prefix="top_five",
-        escopo="Top Five",
-        filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
-        page_mode="top_five",
+    fig_status = px.bar(
+        base_status,
+        x="status",
+        y="valor_operacao",
+        title="Valor por status",
+        text_auto=True,
+        color_discrete_sequence=[MAPA_TEAL],
     )
+    fig_status.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+        title_font=dict(size=18, color=MAPA_NAVY),
+        xaxis_title="",
+        yaxis_title="Valor da operação",
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+    st.plotly_chart(fig_status, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with gc2:
+    base_resp = (
+        df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"]
+        .sum()
+        .reset_index()
+        .sort_values("valor_operacao", ascending=False)
+    )
+    fig_resp = px.bar(
+        base_resp,
+        x="responsavel",
+        y="valor_operacao",
+        title="Valor por responsável",
+        text_auto=True,
+        color_discrete_sequence=[MAPA_NAVY_2],
+    )
+    fig_resp.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+        title_font=dict(size=18, color=MAPA_NAVY),
+        xaxis_title="",
+        yaxis_title="Valor da operação",
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+    st.plotly_chart(fig_resp, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+gc3, gc4 = st.columns(2)
+with gc3:
+    base_oper = (
+        df_filtrado.groupby("operacao", dropna=False)["valor_operacao"]
+        .sum()
+        .reset_index()
+        .sort_values("valor_operacao", ascending=False)
+    )
+    fig_oper = px.pie(
+        base_oper,
+        names="operacao",
+        values="valor_operacao",
+        title="Distribuição por tipo de operação",
+        color_discrete_sequence=build_operation_color_sequence(base_oper["operacao"].tolist()),
+        hole=0.42,
+    )
+    fig_oper.update_traces(
+        sort=False,
+        marker=dict(line=dict(color="#FFFFFF", width=2)),
+        textposition="inside",
+        textinfo="percent",
+        hovertemplate="<b>%{label}</b><br>Participação: %{percent}<br>Valor: R$ %{value:,.2f}<extra></extra>",
+    )
+    fig_oper.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+        title_font=dict(size=18, color=MAPA_NAVY),
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend_title_text="",
+    )
+    st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+    st.plotly_chart(fig_oper, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with gc4:
+    base_chance = (
+        df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"]
+        .sum()
+        .reset_index()
+        .sort_values("valor_operacao", ascending=False)
+    )
+    fig_chance = px.bar(
+        base_chance,
+        x="chance_fechamento",
+        y="valor_operacao",
+        title="Valor por chance de fechamento",
+        text_auto=True,
+        color_discrete_sequence=[MAPA_TEAL_2],
+    )
+    fig_chance.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+        title_font=dict(size=18, color=MAPA_NAVY),
+        xaxis_title="",
+        yaxis_title="Valor da operação",
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+    st.plotly_chart(fig_chance, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+st.markdown('<h3 class="subheader-inline">Operações | Top Five</h3>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="section-note" style="margin-bottom: 10px;">Tabela exclusiva das operações classificadas como Top Five, com card expansível por clique em qualquer célula da linha.</p>',
+    unsafe_allow_html=True
+)
+
+top_five_mask = df_filtrado["top_five"].astype(str).str.strip().str.lower().eq("sim")
+base_top5 = df_filtrado[top_five_mask].copy()
+
+csv_top5 = base_top5.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    label="Baixar CSV | Top Five",
+    data=csv_top5,
+    file_name="painel_operacoes_top_five.csv",
+    mime="text/csv",
+    key="download_csv_top_five"
+)
+
+colunas_tabela = [
+    "top_five", "cliente", "operacao", "prioridade", "status",
+    "responsavel", "chance_fechamento", "valor_operacao", "comissao_total", "comissao_mapa"
+]
+
+colunas_detalhe = [
+    "resumo", "status_detalhado", "forma_remuneracao", "aprovacao_comite", "mandato", "atualizacao",
+    "link_apresentacao", "link_documentos", "historicos_disponiveis"
+]
+
+base_top5 = base_top5[colunas_tabela + colunas_detalhe].copy()
+
+if base_top5.empty:
+    st.info("Nenhuma operação classificada como Top Five para os filtros atuais.")
 else:
-    render_dashboard_page(
-        df_page_base=df[~is_top_five(df["top_five"])].copy(),
-        key_prefix="secundarias",
-        escopo="Secundárias",
-        filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
-        page_mode="secundarias",
-    )
+    html_table_top5 = make_inline_card_table(base_top5)
+    height_top5 = 220 + max(1, len(base_top5)) * 64
+    components.html(html_table_top5, height=min(max(height_top5, 520), 2400), scrolling=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+st.markdown('<h3 class="subheader-inline">Operações | Secundárias</h3>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="section-note" style="margin-bottom: 10px;">Tabela exclusiva das operações que não estão classificadas como Top Five, exibida na seção abaixo.</p>',
+    unsafe_allow_html=True
+)
+
+base_nao_top5 = df_filtrado[~top_five_mask].copy()
+
+csv_nao_top5 = base_nao_top5.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    label="Baixar CSV | Não Top Five",
+    data=csv_nao_top5,
+    file_name="painel_operacoes_nao_top_five.csv",
+    mime="text/csv",
+    key="download_csv_nao_top_five"
+)
+
+base_nao_top5 = base_nao_top5[colunas_tabela + colunas_detalhe].copy()
+
+if base_nao_top5.empty:
+    st.info("Nenhuma operação fora do grupo Top Five para os filtros atuais.")
+else:
+    html_table_nao_top5 = make_inline_card_table(base_nao_top5)
+    height_nao_top5 = 220 + max(1, len(base_nao_top5)) * 64
+    components.html(html_table_nao_top5, height=min(max(height_nao_top5, 520), 2400), scrolling=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
