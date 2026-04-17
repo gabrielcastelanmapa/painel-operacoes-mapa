@@ -648,6 +648,35 @@ def parse_pipeline_excel_from_path(file_path: Path):
         raise ValueError(f"O arquivo '{file_path.name}' não possui a aba 'Pipeline'.")
     ws = wb["Pipeline"]
 
+    def finalize_registro(registro):
+        if not registro:
+            return None
+
+        historicos = []
+        historico_datas = registro.get("_historico_datas", {})
+        historico_buffer = registro.get("_historico_buffer", {})
+
+        for col_idx, data_hist in historico_datas.items():
+            entradas = [str(item).strip() for item in historico_buffer.get(col_idx, []) if str(item).strip()]
+            if not entradas:
+                continue
+
+            historicos.append(
+                {
+                    "data": pd.to_datetime(data_hist, errors="coerce"),
+                    "comentario": "\n\n".join(entradas),
+                }
+            )
+
+        historicos.sort(
+            key=lambda item: item["data"] if pd.notna(item["data"]) else pd.Timestamp.min,
+            reverse=True,
+        )
+        registro["historicos_disponiveis"] = historicos
+        registro.pop("_historico_datas", None)
+        registro.pop("_historico_buffer", None)
+        return registro
+
     registros = []
     atual = None
 
@@ -659,7 +688,7 @@ def parse_pipeline_excel_from_path(file_path: Path):
 
         if col_b == "Cliente:":
             if atual:
-                registros.append(atual)
+                registros.append(finalize_registro(atual))
 
             historico_datas = {}
             for col_idx in range(7, ws.max_column + 1):
@@ -688,6 +717,7 @@ def parse_pipeline_excel_from_path(file_path: Path):
                 "link_documentos": None,
                 "historicos_disponiveis": [],
                 "_historico_datas": historico_datas,
+                "_historico_buffer": {col_idx: [] for col_idx in historico_datas},
             }
             continue
 
@@ -704,26 +734,23 @@ def parse_pipeline_excel_from_path(file_path: Path):
                 if col_f not in [None, ""]:
                     atual["atualizacao"] = col_f
 
-                historicos = []
-                for col_idx, data_hist in atual.get("_historico_datas", {}).items():
-                    comentario = ws.cell(row=row, column=col_idx).value
-                    if comentario in [None, ""]:
-                        continue
-                    historicos.append(
-                        {
-                            "data": pd.to_datetime(data_hist, errors="coerce"),
-                            "comentario": str(comentario).strip(),
-                        }
-                    )
+        for col_idx in atual.get("_historico_datas", {}).keys():
+            comentario = ws.cell(row=row, column=col_idx).value
+            if comentario in [None, ""]:
+                continue
 
-                historicos.sort(
-                    key=lambda item: item["data"] if pd.notna(item["data"]) else pd.Timestamp.min,
-                    reverse=True,
-                )
-                atual["historicos_disponiveis"] = historicos
+            texto = str(comentario).strip()
+            rotulo = str(col_b).strip() if col_b not in [None, ""] else ""
+
+            if rotulo and rotulo != "Operação:":
+                if rotulo.endswith(":"):
+                    rotulo = rotulo[:-1]
+                texto = f"{rotulo}: {texto}"
+
+            atual.setdefault("_historico_buffer", {}).setdefault(col_idx, []).append(texto)
 
     if atual:
-        registros.append(atual)
+        registros.append(finalize_registro(atual))
 
     df = pd.DataFrame(registros)
     if not df.empty:
@@ -752,8 +779,9 @@ def parse_pipeline_excel_from_path(file_path: Path):
     else:
         df["mandato_filtro"] = "BID"
 
-    if "_historico_datas" in df.columns:
-        df = df.drop(columns=["_historico_datas"])
+    for helper_col in ["_historico_datas", "_historico_buffer"]:
+        if helper_col in df.columns:
+            df = df.drop(columns=[helper_col])
 
     df["prob_fechamento"] = df["chance_fechamento"].apply(extrair_probabilidade)
     df["valor_ponderado"] = df["valor_operacao"].fillna(0) * df["prob_fechamento"]
