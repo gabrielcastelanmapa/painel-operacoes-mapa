@@ -1877,7 +1877,7 @@ def filter_metrics_base(df: pd.DataFrame | None) -> pd.DataFrame:
     return base.loc[mask].reset_index(drop=True).copy()
 
 
-def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None, comparative_label: str = "Sem comparativo anterior"):
+def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None, comparative_label: str = "Sem comparativo anterior", df_intro_atual: pd.DataFrame | None = None, df_intro_anterior: pd.DataFrame | None = None):
     df_metricas = filter_metrics_base(df_filtrado)
     df_anterior_metricas = filter_metrics_base(df_anterior)
 
@@ -1919,8 +1919,8 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant), previous_value_label=format_brl_card(ticket_medio_ant), comparative_label=comparative_label), unsafe_allow_html=True)
 
     render_metric_changes_panel(
-        df_filtrado if df_filtrado is not None else pd.DataFrame(),
-        df_anterior if df_anterior is not None else pd.DataFrame(),
+        df_intro_atual if df_intro_atual is not None else (df_filtrado if df_filtrado is not None else pd.DataFrame()),
+        df_intro_anterior if df_intro_anterior is not None else (df_anterior if df_anterior is not None else pd.DataFrame()),
         df_metricas,
         df_anterior_metricas if df_anterior_metricas is not None else pd.DataFrame(),
         comparative_label,
@@ -2209,7 +2209,14 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
 
     st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
 
-    render_metric_cards(df_visao, escopo=escopo, df_anterior=df_visao_anterior, comparative_label=comparative_label)
+    render_metric_cards(
+        df_visao,
+        escopo=escopo,
+        df_anterior=df_visao_anterior,
+        comparative_label=comparative_label,
+        df_intro_atual=df_page_base,
+        df_intro_anterior=df_page_base_anterior,
+    )
     render_charts(df_visao)
 
     if page_mode == "consolidado":
