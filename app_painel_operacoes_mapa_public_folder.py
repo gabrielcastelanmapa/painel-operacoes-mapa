@@ -1,6 +1,5 @@
 import re
 import json
-from io import BytesIO
 import tempfile
 from pathlib import Path
 from html import escape
@@ -10,8 +9,6 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import streamlit.components.v1 as components
-from fpdf import FPDF
-from PIL import Image, ImageDraw, ImageFont
 from openpyxl import load_workbook
 
 st.set_page_config(page_title="Painel de Operações | MAPA", layout="wide")
@@ -2551,25 +2548,41 @@ def build_print_document_html(title, filter_html, cards_html, charts_html, table
 
 
 def trigger_print_html(html_content: str, key: str, label: str):
-    if st.button(label, key=key):
-        payload = json.dumps(html_content)
-        components.html(
-            f"""
-            <script>
-                const html = {payload};
-                const win = window.open('', '_blank');
-                win.document.open();
-                win.document.write(html);
-                win.document.close();
-                setTimeout(() => {{
-                    win.focus();
-                    win.print();
-                }}, 800);
-            </script>
-            """,
-            height=0,
-            width=0,
-        )
+    payload = json.dumps(html_content)
+    safe_key = "".join(ch for ch in str(key) if ch.isalnum() or ch in ("_", "-"))
+    button_html = f"""
+    <div style="display:flex; justify-content:flex-end; margin:8px 0 14px 0;">
+        <button id="{safe_key}_btn" style="
+            background:#05104E;
+            color:white;
+            border:none;
+            border-radius:8px;
+            padding:10px 16px;
+            font-weight:700;
+            cursor:pointer;
+            font-family:Montserrat, Arial, sans-serif;
+        ">{label}</button>
+    </div>
+    <script>
+        const btn = document.getElementById("{safe_key}_btn");
+        btn.addEventListener("click", function() {{
+            const html = {payload};
+            const win = window.open("", "_blank");
+            if (!win) {{
+                alert("O navegador bloqueou a janela de impressão. Libere pop-ups para este site.");
+                return;
+            }}
+            win.document.open();
+            win.document.write(html);
+            win.document.close();
+            setTimeout(() => {{
+                win.focus();
+                win.print();
+            }}, 900);
+        }});
+    </script>
+    """
+    components.html(button_html, height=60)
 
 
 def build_operations_print_html(title: str, filter_state: dict, df_visao: pd.DataFrame):
@@ -2602,381 +2615,6 @@ def build_documents_print_html(filter_state: dict, df_visao: pd.DataFrame):
 
 
 
-
-
-PORTRAIT_PX = (1240, 1754)
-LANDSCAPE_PX = (1754, 1240)
-
-def get_font(size=14, bold=False):
-    candidates = ["DejaVuSans-Bold.ttf", "Arial Bold.ttf"] if bold else ["DejaVuSans.ttf", "Arial.ttf"]
-    for name in candidates:
-        try:
-            return ImageFont.truetype(name, size=size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-
-def hex_to_rgb(value):
-    value = str(value).lstrip("#")
-    if len(value) != 6:
-        return (0, 0, 0)
-    return tuple(int(value[i:i+2], 16) for i in (0, 2, 4))
-
-
-def wrap_text_lines(text_value, max_chars=55):
-    raw = "" if text_value is None or pd.isna(text_value) else str(text_value)
-    words = raw.split()
-    if not words:
-        return [""]
-    lines, current = [], ""
-    for word in words:
-        candidate = (current + " " + word).strip()
-        if len(candidate) <= max_chars:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines
-
-
-def draw_wrapped_text(draw, x, y, text_value, font, fill, max_chars=55, line_gap=4):
-    lines = wrap_text_lines(text_value, max_chars=max_chars)
-    current_y = y
-    for line in lines:
-        draw.text((x, current_y), line, font=font, fill=fill)
-        current_y += font.size + line_gap
-    return current_y
-
-
-def create_base_image(size):
-    return Image.new("RGB", size, "white")
-
-
-def draw_page_title(draw, title, subtitle=None, size=PORTRAIT_PX):
-    draw.text((40, 30), title, font=get_font(28, True), fill=hex_to_rgb(MAPA_NAVY))
-    if subtitle:
-        draw.text((40, 70), subtitle, font=get_font(14, False), fill=hex_to_rgb(TEXT_DARK))
-
-
-def generate_filters_cards_image(title, filter_map, metric_items):
-    img = create_base_image(PORTRAIT_PX)
-    draw = ImageDraw.Draw(img)
-    draw_page_title(draw, title, "Página 1 | Filtros e cards", PORTRAIT_PX)
-
-    y = 110
-    draw.text((40, y), "Filtros aplicados", font=get_font(18, True), fill=hex_to_rgb(MAPA_NAVY_2))
-    y += 26
-
-    card_w = (PORTRAIT_PX[0] - 110) // 2
-    card_h = 95
-    x_positions = [40, 60 + card_w]
-
-    items = list(filter_map.items())
-    for idx in range(0, len(items), 2):
-        row = items[idx:idx+2]
-        max_bottom = y
-        for col_idx, (label, value) in enumerate(row):
-            x = x_positions[col_idx]
-            draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=12, outline=hex_to_rgb(MAPA_BORDER), width=2, fill=(248,252,253))
-            draw.text((x + 12, y + 10), label.upper(), font=get_font(11, True), fill=hex_to_rgb("#62808F"))
-            end_y = draw_wrapped_text(draw, x + 12, y + 32, value, get_font(12), hex_to_rgb(TEXT_DARK), max_chars=34, line_gap=3)
-            max_bottom = max(max_bottom, end_y + 10)
-        y = max_bottom + 14
-
-    y += 8
-    draw.text((40, y), "Cards", font=get_font(18, True), fill=hex_to_rgb(MAPA_NAVY_2))
-    y += 26
-
-    metric_w = (PORTRAIT_PX[0] - 120) // 3
-    metric_h = 110
-    metric_x = [40, 60 + metric_w, 80 + metric_w * 2]
-    for idx in range(0, len(metric_items), 3):
-        row = metric_items[idx:idx+3]
-        for col_idx, (label, value, sub) in enumerate(row):
-            x = metric_x[col_idx]
-            draw.rounded_rectangle((x, y, x + metric_w, y + metric_h), radius=14, outline=hex_to_rgb(MAPA_BORDER), width=2, fill=(255,255,255))
-            draw.text((x + 12, y + 10), label.upper(), font=get_font(11, True), fill=hex_to_rgb("#62808F"))
-            draw.text((x + 12, y + 38), value, font=get_font(26, True), fill=hex_to_rgb(MAPA_NAVY))
-            draw_wrapped_text(draw, x + 12, y + 74, sub, get_font(11), hex_to_rgb("#60717B"), max_chars=26, line_gap=2)
-        y += metric_h + 14
-
-    return img
-
-
-def draw_bar_chart_on_image(draw, box, title, labels, values, color_hex):
-    x1, y1, x2, y2 = box
-    draw.rounded_rectangle(box, radius=12, outline=hex_to_rgb(MAPA_BORDER), width=2, fill=(255,255,255))
-    draw.text((x1 + 12, y1 + 10), title, font=get_font(14, True), fill=hex_to_rgb(MAPA_NAVY))
-    chart_left, chart_top = x1 + 40, y1 + 40
-    chart_right, chart_bottom = x2 - 20, y2 - 45
-    draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=(180,190,200), width=1)
-    draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=(180,190,200), width=1)
-
-    if not values:
-        return
-
-    max_val = max(values) if max(values) > 0 else 1
-    count = max(1, len(values))
-    slot_w = (chart_right - chart_left) / count
-    bar_w = max(10, slot_w * 0.6)
-
-    for idx, value in enumerate(values):
-        bx = chart_left + idx * slot_w + (slot_w - bar_w) / 2
-        height = 0 if max_val == 0 else ((chart_bottom - chart_top) * value / max_val)
-        by = chart_bottom - height
-        draw.rectangle((bx, by, bx + bar_w, chart_bottom), fill=hex_to_rgb(color_hex), outline=hex_to_rgb(color_hex))
-        label = str(labels[idx]) if idx < len(labels) else ""
-        label = label if len(label) <= 14 else label[:13] + "…"
-        draw.text((bx, chart_bottom + 6), label, font=get_font(8), fill=hex_to_rgb(TEXT_DARK))
-        if value:
-            val_text = format_int_br(value)
-            draw.text((bx, max(chart_top, by - 12)), val_text, font=get_font(7), fill=hex_to_rgb(TEXT_DARK))
-
-
-def draw_multicolor_bar_chart_on_image(draw, box, title, labels, values, colors_list):
-    for idx, (label, value, color_hex) in enumerate(zip(labels, values, colors_list)):
-        pass
-    # reuse single-color helper logic with per-bar color
-    x1, y1, x2, y2 = box
-    draw.rounded_rectangle(box, radius=12, outline=hex_to_rgb(MAPA_BORDER), width=2, fill=(255,255,255))
-    draw.text((x1 + 12, y1 + 10), title, font=get_font(14, True), fill=hex_to_rgb(MAPA_NAVY))
-    chart_left, chart_top = x1 + 40, y1 + 40
-    chart_right, chart_bottom = x2 - 20, y2 - 45
-    draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=(180,190,200), width=1)
-    draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=(180,190,200), width=1)
-
-    if not values:
-        return
-
-    max_val = max(values) if max(values) > 0 else 1
-    count = max(1, len(values))
-    slot_w = (chart_right - chart_left) / count
-    bar_w = max(10, slot_w * 0.6)
-
-    for idx, value in enumerate(values):
-        bx = chart_left + idx * slot_w + (slot_w - bar_w) / 2
-        height = 0 if max_val == 0 else ((chart_bottom - chart_top) * value / max_val)
-        by = chart_bottom - height
-        color_hex = colors_list[idx] if idx < len(colors_list) else MAPA_TEAL
-        draw.rectangle((bx, by, bx + bar_w, chart_bottom), fill=hex_to_rgb(color_hex), outline=hex_to_rgb(color_hex))
-        label = str(labels[idx]) if idx < len(labels) else ""
-        label = label if len(label) <= 14 else label[:13] + "…"
-        draw.text((bx, chart_bottom + 6), label, font=get_font(8), fill=hex_to_rgb(TEXT_DARK))
-        if value:
-            val_text = format_int_br(value)
-            draw.text((bx, max(chart_top, by - 12)), val_text, font=get_font(7), fill=hex_to_rgb(TEXT_DARK))
-
-
-def draw_pie_chart_on_image(draw, box, title, labels, values, colors_list):
-    x1, y1, x2, y2 = box
-    draw.rounded_rectangle(box, radius=12, outline=hex_to_rgb(MAPA_BORDER), width=2, fill=(255,255,255))
-    draw.text((x1 + 12, y1 + 10), title, font=get_font(14, True), fill=hex_to_rgb(MAPA_NAVY))
-
-    total = sum(values) if values else 0
-    if total <= 0:
-        return
-
-    pie_box = (x1 + 20, y1 + 40, x1 + 190, y1 + 210)
-    start = 0
-    for idx, value in enumerate(values):
-        extent = 360 * value / total
-        color_hex = colors_list[idx] if idx < len(colors_list) else MAPA_TEAL
-        draw.pieslice(pie_box, start=start, end=start + extent, fill=hex_to_rgb(color_hex), outline=(255,255,255))
-        start += extent
-
-    legend_x = x1 + 220
-    legend_y = y1 + 45
-    for idx, label in enumerate(labels[:6]):
-        color_hex = colors_list[idx] if idx < len(colors_list) else MAPA_TEAL
-        draw.rectangle((legend_x, legend_y + idx*24, legend_x+12, legend_y+12+idx*24), fill=hex_to_rgb(color_hex))
-        pct = (values[idx] / total) * 100 if idx < len(values) else 0
-        short = label if len(str(label)) <= 22 else str(label)[:21] + "…"
-        draw.text((legend_x + 18, legend_y - 2 + idx*24), f"{short} ({pct:.0f}%)", font=get_font(9), fill=hex_to_rgb(TEXT_DARK))
-
-
-def generate_operations_chart_image(df_filtrado: pd.DataFrame):
-    img = create_base_image(LANDSCAPE_PX)
-    draw = ImageDraw.Draw(img)
-    draw_page_title(draw, "Painel de Operações | Gráficos", None, LANDSCAPE_PX)
-
-    margin_x, top_y = 24, 90
-    card_w = (LANDSCAPE_PX[0] - 2*margin_x - 20) // 3
-    card_h = 330
-    positions = [
-        (margin_x, top_y, margin_x + card_w, top_y + card_h),
-        (margin_x + card_w + 10, top_y, margin_x + 2*card_w + 10, top_y + card_h),
-        (margin_x + 2*(card_w + 10), top_y, margin_x + 3*card_w + 20, top_y + card_h),
-        (margin_x, top_y + card_h + 12, margin_x + card_w, top_y + 2*card_h + 12),
-        (margin_x + card_w + 10, top_y + card_h + 12, margin_x + 2*card_w + 10, top_y + 2*card_h + 12),
-        (margin_x + 2*(card_w + 10), top_y + card_h + 12, margin_x + 3*card_w + 20, top_y + 2*card_h + 12),
-    ]
-
-    base_status = df_filtrado.groupby("status", dropna=False)["valor_operacao"].sum().reset_index()
-    draw_bar_chart_on_image(draw, positions[0], "Valor por status", base_status["status"].astype(str).tolist(), base_status["valor_operacao"].fillna(0).tolist(), MAPA_TEAL)
-
-    base_resp = df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
-    draw_bar_chart_on_image(draw, positions[1], "Valor por responsável", base_resp["responsavel"].astype(str).tolist(), base_resp["valor_operacao"].fillna(0).tolist(), MAPA_NAVY_2)
-
-    base_oper = df_filtrado.groupby("operacao", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
-    draw_pie_chart_on_image(draw, positions[2], "Distribuição por tipo de operação", base_oper["operacao"].astype(str).tolist(), base_oper["valor_operacao"].fillna(0).tolist(), build_operation_color_sequence(base_oper["operacao"].tolist()))
-
-    base_chance = df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"].sum().reset_index()
-    draw_bar_chart_on_image(draw, positions[3], "Valor por chance de fechamento", base_chance["chance_fechamento"].astype(str).tolist(), base_chance["valor_operacao"].fillna(0).tolist(), MAPA_TEAL_2)
-
-    base_qtd_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
-    draw_bar_chart_on_image(draw, positions[4], "Quantidade por responsável", base_qtd_resp["responsavel"].astype(str).tolist(), base_qtd_resp["quantidade"].fillna(0).tolist(), MAPA_NAVY_2)
-
-    alta_mask = df_filtrado["chance_fechamento"].fillna("").astype(str).str.strip().eq("1 - Alta")
-    base_qtd_alta = df_filtrado[alta_mask].groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
-    draw_bar_chart_on_image(draw, positions[5], "Qtd. alta chance por responsável", base_qtd_alta["responsavel"].astype(str).tolist(), base_qtd_alta["quantidade"].fillna(0).tolist(), MAPA_TEAL)
-
-    return img
-
-
-def generate_documents_chart_image(df_filtrado: pd.DataFrame):
-    img = create_base_image(LANDSCAPE_PX)
-    draw = ImageDraw.Draw(img)
-    draw_page_title(draw, "Gestão de Documentos | Gráficos", None, LANDSCAPE_PX)
-
-    margin_x, top_y = 32, 100
-    card_w = (LANDSCAPE_PX[0] - 2*margin_x - 12) // 2
-    card_h = 420
-    positions = [
-        (margin_x, top_y, margin_x + card_w, top_y + card_h),
-        (margin_x + card_w + 12, top_y, margin_x + 2*card_w + 12, top_y + card_h),
-        (margin_x, top_y + card_h + 12, margin_x + card_w, top_y + 2*card_h + 12),
-        (margin_x + card_w + 12, top_y + card_h + 12, margin_x + 2*card_w + 12, top_y + 2*card_h + 12),
-    ]
-
-    base_status = df_filtrado.groupby("status", dropna=False).size().reset_index(name="quantidade")
-    draw_bar_chart_on_image(draw, positions[0], "Documentos por status", base_status["status"].astype(str).tolist(), base_status["quantidade"].fillna(0).tolist(), MAPA_TEAL)
-
-    base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
-    draw_bar_chart_on_image(draw, positions[1], "Documentos por responsável", base_resp["responsavel"].astype(str).tolist(), base_resp["quantidade"].fillna(0).tolist(), MAPA_NAVY_2)
-
-    base_prio = df_filtrado.groupby("prioridade", dropna=False).size().reset_index(name="quantidade")
-    draw_bar_chart_on_image(draw, positions[2], "Documentos por prioridade", base_prio["prioridade"].astype(str).tolist(), base_prio["quantidade"].fillna(0).tolist(), MAPA_DARK_TEAL)
-
-    prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
-    base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
-    color_map = {"Vencido": "#C0392B", "1-14 dias": "#F4A6A6", "15-30 dias": MAPA_TEAL_2, "31-90 dias": MAPA_TEAL, "91+ dias": MAPA_NAVY_2, "Sem prazo": "#98A6B8"}
-    draw_multicolor_bar_chart_on_image(draw, positions[3], "Documentos por faixa de prazo", base_prazo["faixa_prazo"].astype(str).tolist(), base_prazo["quantidade"].fillna(0).tolist(), [color_map.get(x, MAPA_TEAL_2) for x in base_prazo["faixa_prazo"].astype(str)])
-
-    return img
-
-
-def save_pil_to_temp(image_obj):
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    image_obj.save(tmp.name, format="PNG")
-    tmp.close()
-    return tmp.name
-
-
-def draw_table_page_image(title, df_display, landscape_mode=True, rows_per_page=22):
-    size = LANDSCAPE_PX if landscape_mode else PORTRAIT_PX
-    pages = []
-    headers = list(df_display.columns)
-    rows = df_display.astype(str).values.tolist()
-    chunks = [rows[i:i+rows_per_page] for i in range(0, len(rows), rows_per_page)] or [[]]
-
-    for page_idx, chunk in enumerate(chunks, start=1):
-        img = create_base_image(size)
-        draw = ImageDraw.Draw(img)
-        draw_page_title(draw, title, f"Tabela | Página {page_idx}", size)
-        x0, y0 = 24, 90
-        table_w = size[0] - 48
-        row_h = 36
-        col_w = table_w / len(headers)
-
-        # header
-        draw.rounded_rectangle((x0, y0, x0 + table_w, y0 + row_h), radius=4, fill=hex_to_rgb("#EEF6FA"), outline=hex_to_rgb(MAPA_BORDER))
-        for col_idx, header in enumerate(headers):
-            draw.text((x0 + col_idx*col_w + 6, y0 + 10), str(header)[:18], font=get_font(10, True), fill=hex_to_rgb(MAPA_NAVY))
-
-        y = y0 + row_h
-        for row in chunk:
-            draw.rectangle((x0, y, x0 + table_w, y + row_h), outline=hex_to_rgb("#D8E4EC"), fill=(255,255,255))
-            for col_idx, value in enumerate(row):
-                lines = wrap_text_lines(value, max_chars=14)
-                for line_idx, line in enumerate(lines[:3]):
-                    draw.text((x0 + col_idx*col_w + 6, y + 5 + line_idx*10), line, font=get_font(8), fill=hex_to_rgb(TEXT_DARK))
-            y += row_h
-
-        pages.append(img)
-    return pages
-
-
-def generate_pdf_from_images(page_images, orientations):
-    pdf = FPDF(unit="mm")
-    temp_paths = []
-    try:
-        for img, orientation in zip(page_images, orientations):
-            page_format = "A4"
-            pdf.add_page(orientation=orientation, format=page_format)
-            temp_path = save_pil_to_temp(img)
-            temp_paths.append(temp_path)
-            if orientation == "P":
-                pdf.image(temp_path, x=0, y=0, w=210, h=297)
-            else:
-                pdf.image(temp_path, x=0, y=0, w=297, h=210)
-        data = pdf.output(dest="S")
-        return bytes(data) if isinstance(data, (bytes, bytearray)) else data.encode("latin1")
-    finally:
-        for path in temp_paths:
-            try:
-                Path(path).unlink(missing_ok=True)
-            except Exception:
-                pass
-
-
-def generate_operations_pdf_bytes(title: str, filter_state: dict, df_visao: pd.DataFrame):
-    filter_map = {
-        "Responsável": format_filter_values_for_print(filter_state.get("responsavel", [])),
-        "Status": format_filter_values_for_print(filter_state.get("status", [])),
-        "Operação": format_filter_values_for_print(filter_state.get("operacao", [])),
-        "Prioridade": format_filter_values_for_print(filter_state.get("prioridade", [])),
-        "Mandato": format_filter_values_for_print(filter_state.get("mandato", [])),
-    }
-    page1 = generate_filters_cards_image(f"Painel de Operações | {title}", filter_map, metric_values_operations(df_visao))
-    page2 = generate_operations_chart_image(df_visao)
-
-    display_df = df_visao.copy()
-    display_df["valor_operacao"] = display_df["valor_operacao"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
-    display_df["comissao_total"] = display_df["comissao_total"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
-    display_df["comissao_mapa"] = display_df["comissao_mapa"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
-    display_df = display_df[["top_five", "cliente", "operacao", "prioridade", "status", "responsavel", "chance_fechamento", "valor_operacao", "comissao_total", "comissao_mapa"]].rename(columns={
-        "top_five": "Top Five", "cliente": "Cliente", "operacao": "Operação", "prioridade": "Prioridade", "status": "Status",
-        "responsavel": "Responsável", "chance_fechamento": "Chance", "valor_operacao": "Valor da Operação", "comissao_total": "Comissão Total", "comissao_mapa": "Comissão MAPA",
-    })
-    table_pages = draw_table_page_image(f"Painel de Operações | {title}", display_df, landscape_mode=True, rows_per_page=20)
-    return generate_pdf_from_images([page1, page2] + table_pages, ["P", "L"] + ["L"]*len(table_pages))
-
-
-def generate_documents_pdf_bytes(filter_state: dict, df_visao: pd.DataFrame):
-    filter_map = {
-        "Projeto": format_filter_values_for_print(filter_state.get("projeto", [])),
-        "Prioridade": format_filter_values_for_print(filter_state.get("prioridade", [])),
-        "Status": format_filter_values_for_print(filter_state.get("status", [])),
-        "Tipo de Documento": format_filter_values_for_print(filter_state.get("tipo_documento", [])),
-        "Responsável": format_filter_values_for_print(filter_state.get("responsavel", [])),
-        "Faixa de prazo": format_filter_values_for_print(filter_state.get("faixa_prazo", [])),
-    }
-    page1 = generate_filters_cards_image("Gestão de Documentos", filter_map, metric_values_documents(df_visao))
-    page2 = generate_documents_chart_image(df_visao)
-
-    display_df = df_visao.copy()
-    display_df["valor"] = display_df["valor"].apply(lambda x: format_brl(x) if pd.notna(x) and float(x) != 0 else "—")
-    display_df["dias_prazo_final"] = display_df["dias_prazo_final"].apply(format_int_br)
-    display_df = display_df[["prioridade", "projeto", "nome_documento", "responsavel", "status", "dias_prazo_final", "observacoes", "acao_sugerida"]].rename(columns={
-        "prioridade": "Prioridade", "projeto": "Projeto", "nome_documento": "Nome do Documento", "responsavel": "Responsável",
-        "status": "Status", "dias_prazo_final": "Dias para o prazo final", "observacoes": "Observações", "acao_sugerida": "Ação Sugerida",
-    })
-    table_pages = draw_table_page_image("Gestão de Documentos", display_df, landscape_mode=True, rows_per_page=18)
-    return generate_pdf_from_images([page1, page2] + table_pages, ["P", "L"] + ["L"]*len(table_pages))
-
 def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, comparative_label: str, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -2991,12 +2629,10 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
     df_visao = build_filtered_dashboard_view(df_filtrado)
     df_visao_anterior = apply_dashboard_filter_state(df_page_base_anterior, filter_state)
 
-    st.download_button(
-        label=f"Baixar PDF | {titulo_escopo}",
-        data=generate_operations_pdf_bytes(titulo_escopo, filter_state, df_visao),
-        file_name=f"painel_operacoes_{titulo_escopo.lower().replace(' ', '_')}.pdf",
-        mime="application/pdf",
-        key=f"{key_prefix}_pdf_download",
+    trigger_print_html(
+        build_operations_print_html(titulo_escopo, filter_state, df_visao),
+        key=f"{key_prefix}_print_html",
+        label=f"Imprimir | {titulo_escopo}",
     )
 
     st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
@@ -3768,12 +3404,10 @@ def render_document_control_section():
 
     df_docs_filtrado, docs_filter_state = render_document_filter_block(df_docs, key_prefix="documentos")
 
-    st.download_button(
-        label="Baixar PDF | Gestão de Documentos",
-        data=generate_documents_pdf_bytes(docs_filter_state, df_docs_filtrado),
-        file_name="gestao_documentos.pdf",
-        mime="application/pdf",
-        key="documentos_pdf_download",
+    trigger_print_html(
+        build_documents_print_html(docs_filter_state, df_docs_filtrado),
+        key="documentos_print_html",
+        label="Imprimir | Gestão de Documentos",
     )
 
     st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
