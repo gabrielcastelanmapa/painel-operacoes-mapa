@@ -299,6 +299,18 @@ def inject_brand_css():
             display: inline-block;
         }}
 
+        .metric-card-wrap {{
+            margin: 0;
+        }}
+
+        .metric-card-wrap summary {{
+            list-style: none;
+        }}
+
+        .metric-card-wrap summary::-webkit-details-marker {{
+            display: none;
+        }}
+
         .metric-card {{
             background: linear-gradient(180deg, #ffffff 0%, #F8FCFD 100%);
             border: 1px solid rgba(183,214,226,0.9);
@@ -308,6 +320,93 @@ def inject_brand_css():
             box-shadow: 0 10px 24px rgba(4,16,78,0.05);
             position: relative;
             overflow: hidden;
+        }}
+
+        .metric-card-summary {{
+            cursor: pointer;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+        }}
+
+        .metric-card-summary:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 12px 26px rgba(4,16,78,0.07);
+        }}
+
+        .metric-popover {{
+            margin-top: 8px;
+            background: rgba(255,255,255,0.97);
+            border: 1px solid rgba(183,214,226,0.95);
+            border-radius: 14px;
+            padding: 10px 12px;
+            box-shadow: 0 10px 24px rgba(4,16,78,0.07);
+            font-size: 0.82rem;
+            color: #536672;
+        }}
+
+        .metric-popover strong {{
+            color: {MAPA_NAVY};
+        }}
+
+        .metric-change-panel {{
+            margin-top: 12px;
+            margin-bottom: 8px;
+            background: rgba(255,255,255,0.90);
+            border: 1px solid rgba(183,214,226,0.85);
+            border-radius: 16px;
+            padding: 0;
+            overflow: hidden;
+        }}
+
+        .metric-change-panel summary {{
+            list-style: none;
+            cursor: pointer;
+            padding: 12px 16px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: {MAPA_NAVY};
+            background: linear-gradient(180deg, rgba(232,245,247,0.55), rgba(255,255,255,0.95));
+        }}
+
+        .metric-change-panel summary::-webkit-details-marker {{
+            display: none;
+        }}
+
+        .metric-change-content {{
+            padding: 12px 16px 14px 16px;
+        }}
+
+        .metric-change-base {{
+            font-size: 0.80rem;
+            color: #60717B;
+            margin-bottom: 10px;
+        }}
+
+        .metric-change-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }}
+
+        .metric-change-item {{
+            border: 1px solid rgba(183,214,226,0.65);
+            border-radius: 14px;
+            padding: 10px 12px;
+            background: rgba(248,252,253,0.92);
+        }}
+
+        .metric-change-item-title {{
+            font-size: 0.78rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #62808F;
+            margin-bottom: 6px;
+        }}
+
+        .metric-change-item-text {{
+            font-size: 0.86rem;
+            color: {TEXT_DARK};
+            line-height: 1.45;
         }}
 
         .metric-card::before {{
@@ -988,18 +1087,95 @@ def metric_trend_icon(trend: str) -> str:
     return '<span class="metric-trend flat"></span>'
 
 
-def metric_card(label, value, sub=None, trend="flat"):
+def format_delta_value(delta, kind: str = "number") -> str:
+    try:
+        delta = float(delta)
+    except Exception:
+        delta = 0.0
+
+    if kind == "currency":
+        prefix = "+" if delta > 0 else ""
+        return f"{prefix}{format_brl_card(delta)}"
+    if kind == "count":
+        prefix = "+" if delta > 0 else ""
+        return f"{prefix}{int(round(delta))}"
+    prefix = "+" if delta > 0 else ""
+    return f"{prefix}{round(delta):,.0f}".replace(",", ".")
+
+
+def build_metric_change_item(label: str, current_value, previous_value, kind: str = "number") -> str:
+    trend = compare_metric_direction(current_value, previous_value)
+    delta = (current_value or 0) - (previous_value or 0)
+    trend_html = metric_trend_icon(trend)
+
+    if kind == "currency":
+        current_fmt = format_brl_card(current_value)
+        previous_fmt = format_brl_card(previous_value)
+    elif kind == "count":
+        current_fmt = f"{int(round(current_value or 0))}"
+        previous_fmt = f"{int(round(previous_value or 0))}"
+    else:
+        current_fmt = f"{round(float(current_value or 0)):,.0f}".replace(",", ".")
+        previous_fmt = f"{round(float(previous_value or 0)):,.0f}".replace(",", ".")
+
+    if trend == "up":
+        phrase = f"Subiu de {previous_fmt} para {current_fmt} ({format_delta_value(delta, kind)})."
+    elif trend == "down":
+        phrase = f"Caiu de {previous_fmt} para {current_fmt} ({format_delta_value(delta, kind)})."
+    else:
+        phrase = f"Permaneceu em {current_fmt}."
+
+    return f"""
+    <div class="metric-change-item">
+        <div class="metric-change-item-title">{escape(label)}</div>
+        <div class="metric-change-item-text">{trend_html} {escape(phrase)}</div>
+    </div>
+    """
+
+
+def render_metric_changes_panel(items_html: list[str], comparative_label: str):
+    html = f"""
+    <details class="metric-change-panel">
+        <summary>Ver mudanças vs base comparativa</summary>
+        <div class="metric-change-content">
+            <div class="metric-change-base"><strong>Base comparativa utilizada:</strong> {escape(comparative_label)}</div>
+            <div class="metric-change-grid">
+                {''.join(items_html)}
+            </div>
+        </div>
+    </details>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def metric_card(label, value, sub=None, trend="flat", previous_value_label=None, comparative_label="Sem comparativo anterior"):
     sub_html = f'<div class="metric-sub">{escape(str(sub))}</div>' if sub else ''
     trend_html = metric_trend_icon(trend)
-    return f"""
-    <div class="metric-card">
-        <div class="metric-label">{escape(label)}</div>
-        <div class="metric-value-row">
-            <div class="metric-value">{escape(value)}</div>
-            {trend_html}
+    if previous_value_label:
+        popover_html = f"""
+        <div class="metric-popover">
+            <strong>Base comparativa utilizada:</strong> {escape(comparative_label)}<br/>
+            <strong>Valor na semana anterior:</strong> {escape(previous_value_label)}
         </div>
-        {sub_html}
-    </div>
+        """
+    else:
+        popover_html = """
+        <div class="metric-popover">
+            <strong>Sem base comparativa disponível.</strong>
+        </div>
+        """
+    return f"""
+    <details class="metric-card-wrap">
+        <summary class="metric-card metric-card-summary">
+            <div class="metric-label">{escape(label)}</div>
+            <div class="metric-value-row">
+                <div class="metric-value">{escape(value)}</div>
+                {trend_html}
+            </div>
+            {sub_html}
+        </summary>
+        {popover_html}
+    </details>
     """
 
 
@@ -1497,7 +1673,7 @@ def build_filtered_dashboard_view(df_filtrado: pd.DataFrame) -> pd.DataFrame:
     return df_filtrado.reset_index(drop=True).copy()
 
 
-def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None):
+def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None, comparative_label: str = "Sem comparativo anterior"):
     total_operacoes = len(df_filtrado)
     valor_total = df_filtrado["valor_operacao"].sum()
     valor_ponderado = df_filtrado["valor_ponderado"].sum()
@@ -1512,6 +1688,7 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
         comissao_mapa_total_ant = comissao_mapa_total
         comissao_mapa_ponderada_ant = comissao_mapa_ponderada
         ticket_medio_ant = ticket_medio
+        comparative_label = "Sem comparativo anterior"
     else:
         total_operacoes_ant = len(df_anterior)
         valor_total_ant = df_anterior["valor_operacao"].sum()
@@ -1522,17 +1699,27 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
 
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
-        st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}", trend=compare_metric_direction(total_operacoes, total_operacoes_ant)), unsafe_allow_html=True)
+        st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}", trend=compare_metric_direction(total_operacoes, total_operacoes_ant), previous_value_label=f"{int(round(total_operacoes_ant))}", comparative_label=comparative_label), unsafe_allow_html=True)
     with m2:
-        st.markdown(metric_card("Valor Total", format_brl_card(valor_total), f"Volume bruto | {escopo}", trend=compare_metric_direction(valor_total, valor_total_ant)), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Total", format_brl_card(valor_total), f"Volume bruto | {escopo}", trend=compare_metric_direction(valor_total, valor_total_ant), previous_value_label=format_brl_card(valor_total_ant), comparative_label=comparative_label), unsafe_allow_html=True)
     with m3:
-        st.markdown(metric_card("Valor Ponderado", format_brl_card(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}", trend=compare_metric_direction(valor_ponderado, valor_ponderado_ant)), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado", format_brl_card(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}", trend=compare_metric_direction(valor_ponderado, valor_ponderado_ant), previous_value_label=format_brl_card(valor_ponderado_ant), comparative_label=comparative_label), unsafe_allow_html=True)
     with m4:
-        st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}", trend=compare_metric_direction(comissao_mapa_total, comissao_mapa_total_ant)), unsafe_allow_html=True)
+        st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}", trend=compare_metric_direction(comissao_mapa_total, comissao_mapa_total_ant), previous_value_label=format_brl_card(comissao_mapa_total_ant), comparative_label=comparative_label), unsafe_allow_html=True)
     with m5:
-        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}", trend=compare_metric_direction(comissao_mapa_ponderada, comissao_mapa_ponderada_ant)), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}", trend=compare_metric_direction(comissao_mapa_ponderada, comissao_mapa_ponderada_ant), previous_value_label=format_brl_card(comissao_mapa_ponderada_ant), comparative_label=comparative_label), unsafe_allow_html=True)
     with m6:
-        st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant)), unsafe_allow_html=True)
+        st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant), previous_value_label=format_brl_card(ticket_medio_ant), comparative_label=comparative_label), unsafe_allow_html=True)
+
+    change_items = [
+        build_metric_change_item("Nº de Operações", total_operacoes, total_operacoes_ant, kind="count"),
+        build_metric_change_item("Valor Total", valor_total, valor_total_ant, kind="currency"),
+        build_metric_change_item("Valor Ponderado", valor_ponderado, valor_ponderado_ant, kind="currency"),
+        build_metric_change_item("Comissão MAPA", comissao_mapa_total, comissao_mapa_total_ant, kind="currency"),
+        build_metric_change_item("Valor Ponderado, Comissão MAPA", comissao_mapa_ponderada, comissao_mapa_ponderada_ant, kind="currency"),
+        build_metric_change_item("Ticket Médio", ticket_medio, ticket_medio_ant, kind="currency"),
+    ]
+    render_metric_changes_panel(change_items, comparative_label)
 
 
 def render_empty_state(title: str, message: str):
@@ -1801,7 +1988,7 @@ def render_consolidated_tables(df_filtrado: pd.DataFrame):
     )
 
 
-def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
+def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, comparative_label: str, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
@@ -1817,7 +2004,7 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
 
     st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
 
-    render_metric_cards(df_visao, escopo=escopo, df_anterior=df_visao_anterior)
+    render_metric_cards(df_visao, escopo=escopo, df_anterior=df_visao_anterior, comparative_label=comparative_label)
     render_charts(df_visao)
 
     if page_mode == "consolidado":
@@ -2328,6 +2515,7 @@ def render_operations_section(visao_painel: str):
         render_dashboard_page(
             df_page_base=df.copy(),
             df_page_base_anterior=df_anterior.copy(),
+            comparative_label=arquivo_anterior_label,
             key_prefix="consolidado",
             escopo="consolidado",
             filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
@@ -2337,6 +2525,7 @@ def render_operations_section(visao_painel: str):
         render_dashboard_page(
             df_page_base=df[is_top_five(df["top_five"])].copy(),
             df_page_base_anterior=df_anterior[is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
+            comparative_label=arquivo_anterior_label,
             key_prefix="top_five",
             escopo="Top Five",
             filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
@@ -2346,6 +2535,7 @@ def render_operations_section(visao_painel: str):
         render_dashboard_page(
             df_page_base=df[~is_top_five(df["top_five"])].copy(),
             df_page_base_anterior=df_anterior[~is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
+            comparative_label=arquivo_anterior_label,
             key_prefix="secundarias",
             escopo="Secundárias",
             filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
