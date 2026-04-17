@@ -1103,49 +1103,178 @@ def format_delta_value(delta, kind: str = "number") -> str:
     return f"{prefix}{round(delta):,.0f}".replace(",", ".")
 
 
-def build_metric_change_item(label: str, current_value, previous_value, kind: str = "number") -> str:
-    trend = compare_metric_direction(current_value, previous_value)
-    delta = (current_value or 0) - (previous_value or 0)
-    trend_html = metric_trend_icon(trend)
-
-    if kind == "currency":
-        current_fmt = format_brl_card(current_value)
-        previous_fmt = format_brl_card(previous_value)
-    elif kind == "count":
-        current_fmt = f"{int(round(current_value or 0))}"
-        previous_fmt = f"{int(round(previous_value or 0))}"
-    else:
-        current_fmt = f"{round(float(current_value or 0)):,.0f}".replace(",", ".")
-        previous_fmt = f"{round(float(previous_value or 0)):,.0f}".replace(",", ".")
-
-    if trend == "up":
-        phrase = f"Subiu de {previous_fmt} para {current_fmt} ({format_delta_value(delta, kind)})."
-    elif trend == "down":
-        phrase = f"Caiu de {previous_fmt} para {current_fmt} ({format_delta_value(delta, kind)})."
-    else:
-        phrase = f"Permaneceu em {current_fmt}."
-
-    return f"""
-    <div class="metric-change-item">
-        <div class="metric-change-item-title">{escape(label)}</div>
-        <div class="metric-change-item-text">{trend_html} {escape(phrase)}</div>
-    </div>
-    """
+def build_compare_key(cliente, operacao) -> str:
+    cliente_txt = "" if pd.isna(cliente) else str(cliente).strip()
+    operacao_txt = "" if pd.isna(operacao) else str(operacao).strip()
+    if cliente_txt and operacao_txt:
+        return f"{cliente_txt} | {operacao_txt}"
+    return operacao_txt or cliente_txt or "Sem identificação"
 
 
-def render_metric_changes_panel(items_html: list[str], comparative_label: str):
-    html = f"""
-    <details class="metric-change-panel">
-        <summary>Ver mudanças vs base comparativa</summary>
-        <div class="metric-change-content">
-            <div class="metric-change-base"><strong>Base comparativa utilizada:</strong> {escape(comparative_label)}</div>
-            <div class="metric-change-grid">
-                {''.join(items_html)}
-            </div>
-        </div>
-    </details>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+def aggregate_operations_for_compare(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=[
+            "compare_key", "cliente", "operacao", "status", "chance_fechamento",
+            "valor_operacao", "valor_ponderado", "comissao_mapa", "comissao_mapa_ponderada"
+        ])
+
+    base = df.copy()
+    base["compare_key"] = [
+        build_compare_key(cliente, operacao)
+        for cliente, operacao in zip(base.get("cliente", ""), base.get("operacao", ""))
+    ]
+
+    return (
+        base.groupby("compare_key", dropna=False)
+        .agg(
+            cliente=("cliente", "first"),
+            operacao=("operacao", "first"),
+            status=("status", "first"),
+            chance_fechamento=("chance_fechamento", "first"),
+            valor_operacao=("valor_operacao", "sum"),
+            valor_ponderado=("valor_ponderado", "sum"),
+            comissao_mapa=("comissao_mapa", "sum"),
+            comissao_mapa_ponderada=("comissao_mapa_ponderada", "sum"),
+        )
+        .reset_index()
+    )
+
+
+def summarize_names(names, max_items: int = 3) -> str:
+    names = [str(name).strip() for name in names if str(name).strip()]
+    if not names:
+        return ""
+    if len(names) <= max_items:
+        return "; ".join(names)
+    restantes = len(names) - max_items
+    return "; ".join(names[:max_items]) + f"; e mais {restantes}"
+
+
+def build_driver_rows(df_atual: pd.DataFrame, df_anterior: pd.DataFrame) -> pd.DataFrame:
+    atual = aggregate_operations_for_compare(df_atual)
+    anterior = aggregate_operations_for_compare(df_anterior)
+
+    merged = atual.merge(
+        anterior,
+        on="compare_key",
+        how="outer",
+        suffixes=("_atual", "_anterior"),
+    )
+
+    for col in ["cliente", "operacao", "status", "chance_fechamento"]:
+        merged[f"{col}_atual"] = merged.get(f"{col}_atual", "").fillna("")
+        merged[f"{col}_anterior"] = merged.get(f"{col}_anterior", "").fillna("")
+
+    for col in ["valor_operacao", "valor_ponderado", "comissao_mapa", "comissao_mapa_ponderada"]:
+        merged[f"{col}_atual"] = pd.to_numeric(merged.get(f"{col}_atual", 0), errors="coerce").fillna(0.0)
+        merged[f"{col}_anterior"] = pd.to_numeric(merged.get(f"{col}_anterior", 0), errors="coerce").fillna(0.0)
+
+    return merged
+
+
+def build_metric_reason_text(metric_name: str, df_atual: pd.DataFrame, df_anterior: pd.DataFrame) -> str:
+    merged = build_driver_rows(df_atual, df_anterior)
+
+    novos = merged[(merged["valor_operacao_anterior"] == 0) & (merged["valor_operacao_atual"] > 0)]
+    removidos = merged[(merged["valor_operacao_anterior"] > 0) & (merged["valor_operacao_atual"] == 0)]
+    status_alterado = merged[
+        (merged["valor_operacao_anterior"] > 0)
+        & (merged["valor_operacao_atual"] > 0)
+        & (merged["status_atual"] != merged["status_anterior"])
+    ]
+
+    if metric_name == "Nº de Operações":
+        partes = []
+        if not novos.empty:
+            partes.append(f"Entradas: {summarize_names(novos['compare_key'].tolist())}.")
+        if not removidos.empty:
+            partes.append(f"Saídas: {summarize_names(removidos['compare_key'].tolist())}.")
+        if not status_alterado.empty:
+            descricoes = []
+            for _, row in status_alterado.head(3).iterrows():
+                descricoes.append(f"{row['compare_key']} ({row['status_anterior']} → {row['status_atual']})")
+            partes.append(f"Status alterado: {'; '.join(descricoes)}.")
+        return " ".join(partes) if partes else "Sem mudança relevante de escopo entre as semanas."
+
+    metric_map = {
+        "Valor Total": "valor_operacao",
+        "Valor Ponderado": "valor_ponderado",
+        "Comissão MAPA": "comissao_mapa",
+        "Valor Ponderado, Comissão MAPA": "comissao_mapa_ponderada",
+    }
+
+    if metric_name in metric_map:
+        col = metric_map[metric_name]
+        merged["delta_metric"] = merged[f"{col}_atual"] - merged[f"{col}_anterior"]
+        relevantes = merged[merged["delta_metric"].abs() > 0.5].copy()
+        if relevantes.empty:
+            return "Sem variação material frente à base comparativa."
+
+        relevantes = relevantes.sort_values("delta_metric", key=lambda s: s.abs(), ascending=False).head(3)
+        explicacoes = []
+
+        for _, row in relevantes.iterrows():
+            nome = row["compare_key"]
+            delta_fmt = format_delta_value(row["delta_metric"], "currency")
+
+            if row[f"{col}_anterior"] == 0 and row[f"{col}_atual"] > 0:
+                explicacoes.append(f"Entrada de {nome} ({delta_fmt}).")
+                continue
+            if row[f"{col}_anterior"] > 0 and row[f"{col}_atual"] == 0:
+                explicacoes.append(f"Saída de {nome} ({delta_fmt}).")
+                continue
+
+            causas = []
+            if row["status_atual"] != row["status_anterior"]:
+                causas.append(f"status {row['status_anterior']} → {row['status_atual']}")
+            if row["chance_fechamento_atual"] != row["chance_fechamento_anterior"]:
+                causas.append(f"chance {row['chance_fechamento_anterior']} → {row['chance_fechamento_atual']}")
+            if abs(row["valor_operacao_atual"] - row["valor_operacao_anterior"]) > 0.5 and metric_name in ["Valor Total", "Valor Ponderado"]:
+                causas.append("mudança no valor da operação")
+            if abs(row["comissao_mapa_atual"] - row["comissao_mapa_anterior"]) > 0.5 and metric_name in ["Comissão MAPA", "Valor Ponderado, Comissão MAPA"]:
+                causas.append("mudança na comissão MAPA")
+
+            causa_txt = "; ".join(causas) if causas else "revisão da operação"
+            explicacoes.append(f"{nome} ({delta_fmt}; {causa_txt}).")
+
+        return " ".join(explicacoes)
+
+    if metric_name == "Ticket Médio":
+        total_atual = pd.to_numeric(df_atual["valor_operacao"], errors="coerce").fillna(0).sum()
+        total_anterior = pd.to_numeric(df_anterior["valor_operacao"], errors="coerce").fillna(0).sum()
+        qtd_atual = len(df_atual)
+        qtd_anterior = len(df_anterior)
+
+        partes = []
+        if qtd_atual != qtd_anterior:
+            partes.append(f"Quantidade de operações mudou de {qtd_anterior} para {qtd_atual}.")
+        if round(total_atual, 0) != round(total_anterior, 0):
+            partes.append(f"Valor total mudou de {format_brl_card(total_anterior)} para {format_brl_card(total_atual)}.")
+        partes.append(build_metric_reason_text("Valor Total", df_atual, df_anterior))
+        return " ".join(partes)
+
+    return "Sem explicação adicional disponível para esta métrica."
+
+
+def render_metric_changes_panel(df_atual: pd.DataFrame, df_anterior: pd.DataFrame, comparative_label: str):
+    with st.expander("Ver mudanças vs base comparativa", expanded=False):
+        st.caption(f"Base comparativa utilizada: {comparative_label}")
+
+        col1, col2 = st.columns(2)
+        metric_texts = [
+            ("Nº de Operações", build_metric_reason_text("Nº de Operações", df_atual, df_anterior)),
+            ("Valor Total", build_metric_reason_text("Valor Total", df_atual, df_anterior)),
+            ("Valor Ponderado", build_metric_reason_text("Valor Ponderado", df_atual, df_anterior)),
+            ("Comissão MAPA", build_metric_reason_text("Comissão MAPA", df_atual, df_anterior)),
+            ("Valor Ponderado, Comissão MAPA", build_metric_reason_text("Valor Ponderado, Comissão MAPA", df_atual, df_anterior)),
+            ("Ticket Médio", build_metric_reason_text("Ticket Médio", df_atual, df_anterior)),
+        ]
+
+        for idx, (titulo, texto) in enumerate(metric_texts):
+            target_col = col1 if idx % 2 == 0 else col2
+            with target_col:
+                st.markdown(f"**{titulo}**")
+                st.write(texto)
 
 
 def metric_card(label, value, sub=None, trend="flat", previous_value_label=None, comparative_label="Sem comparativo anterior"):
@@ -1711,15 +1840,7 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
     with m6:
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant), previous_value_label=format_brl_card(ticket_medio_ant), comparative_label=comparative_label), unsafe_allow_html=True)
 
-    change_items = [
-        build_metric_change_item("Nº de Operações", total_operacoes, total_operacoes_ant, kind="count"),
-        build_metric_change_item("Valor Total", valor_total, valor_total_ant, kind="currency"),
-        build_metric_change_item("Valor Ponderado", valor_ponderado, valor_ponderado_ant, kind="currency"),
-        build_metric_change_item("Comissão MAPA", comissao_mapa_total, comissao_mapa_total_ant, kind="currency"),
-        build_metric_change_item("Valor Ponderado, Comissão MAPA", comissao_mapa_ponderada, comissao_mapa_ponderada_ant, kind="currency"),
-        build_metric_change_item("Ticket Médio", ticket_medio, ticket_medio_ant, kind="currency"),
-    ]
-    render_metric_changes_panel(change_items, comparative_label)
+    render_metric_changes_panel(df_filtrado, df_anterior if df_anterior is not None else pd.DataFrame(), comparative_label)
 
 
 def render_empty_state(title: str, message: str):
