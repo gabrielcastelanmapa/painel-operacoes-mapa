@@ -482,6 +482,56 @@ def inject_brand_css():
             margin-top: 10px;
         }}
 
+        .print-toolbar {{
+            display: flex;
+            justify-content: flex-end;
+            margin: 8px 0 14px 0;
+        }}
+
+        .print-page {{
+            break-after: page;
+            page-break-after: always;
+        }}
+
+        .print-page:last-child {{
+            break-after: auto;
+            page-break-after: auto;
+        }}
+
+        @page landscapePage {{
+            size: landscape;
+            margin: 12mm;
+        }}
+
+        .print-page-landscape {{
+            page: landscapePage;
+        }}
+
+        @media print {{
+            [data-testid="stSidebar"],
+            [data-testid="stHeader"],
+            .non-printable,
+            .print-toolbar,
+            .brand-shell,
+            button,
+            [data-testid="stFileUploader"],
+            [data-testid="stDownloadButton"] {{
+                display: none !important;
+            }}
+
+            .block-container {{
+                max-width: 100% !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }}
+
+            .section-card,
+            .chart-box,
+            .metric-card {{
+                box-shadow: none !important;
+            }}
+        }}
+
         .metric-card::before {{
             content: "";
             position: absolute;
@@ -1862,7 +1912,7 @@ def is_top_five(series: pd.Series) -> pd.Series:
 def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd.DataFrame:
     st.markdown(
         f"""
-        <div class="section-card">
+        <div class="section-card non-printable">
             <div class="section-head">
                 <h3 class="section-title">Filtros executivos</h3>
                 <p class="section-note">{escape(note)}</p>
@@ -2029,7 +2079,7 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
 
 
 def render_empty_state(title: str, message: str):
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-card non-printable">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="subheader-inline">{escape(title)}</h3>', unsafe_allow_html=True)
     st.info(message)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -2294,9 +2344,26 @@ def render_consolidated_tables(df_filtrado: pd.DataFrame):
     )
 
 
+
+def render_print_button(key: str, label: str = "Imprimir visão"):
+    st.markdown('<div class="print-toolbar">', unsafe_allow_html=True)
+    if st.button(label, key=key):
+        components.html(
+            """
+            <script>
+                window.parent.print();
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+
 def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, comparative_label: str, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-card non-printable">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
     st.markdown(
         f'<p class="section-note">Esta seção reúne filtros, métricas, gráficos e tabela(s) da visão {escape(titulo_escopo)}.</p>',
@@ -2304,6 +2371,9 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
+    render_print_button(key=f"{key_prefix}_print", label=f"Imprimir | {titulo_escopo}")
+
+    st.markdown('<div class="print-page">', unsafe_allow_html=True)
     df_filtrado, filter_state = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
     df_visao = build_filtered_dashboard_view(df_filtrado)
     df_visao_anterior = apply_dashboard_filter_state(df_page_base_anterior, filter_state)
@@ -2318,8 +2388,13 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
         df_intro_atual=df_page_base,
         df_intro_anterior=df_page_base_anterior,
     )
-    render_charts(df_visao)
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    st.markdown('<div class="print-page">', unsafe_allow_html=True)
+    render_charts(df_visao)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="print-page print-page-landscape">', unsafe_allow_html=True)
     if page_mode == "consolidado":
         render_consolidated_tables(df_visao)
     elif page_mode == "top_five":
@@ -2342,6 +2417,7 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
             empty_message="Nenhuma operação secundária para os filtros atuais.",
             key_prefix=f"{key_prefix}_tabela",
         )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 
@@ -3067,12 +3143,25 @@ def render_document_control_section():
         st.warning("Nenhum registro válido foi encontrado na base de Gestão de Obrigações.")
         return
 
+    render_print_button(key="documentos_print", label="Imprimir | Gestão de Documentos")
+
+    st.markdown('<div class="print-page">', unsafe_allow_html=True)
     df_docs_filtrado = render_document_filter_block(df_docs, key_prefix="documentos")
     st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
     render_document_metric_cards(df_docs_filtrado)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="print-page">', unsafe_allow_html=True)
     render_document_charts(df_docs_filtrado)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="non-printable">', unsafe_allow_html=True)
     render_documents_due_soon_by_responsavel(df_docs_filtrado)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="print-page print-page-landscape">', unsafe_allow_html=True)
     render_document_table(df_docs_filtrado, legenda_df=legenda_df)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 sessao_menu, visao_operacoes_menu = render_sidebar_menu()
