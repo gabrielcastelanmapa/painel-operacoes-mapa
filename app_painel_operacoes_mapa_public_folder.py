@@ -534,9 +534,9 @@ def extract_reference_date_from_name(path_or_name) -> pd.Timestamp | None:
     match_6 = re.search(r"(?<!\d)(\d{2})[^0-9]?(\d{2})[^0-9]?(\d{2})(?!\d)", name)
     if match_6:
         try:
-            day = int(match_6.group(1))
+            year = 2000 + int(match_6.group(1))
             month = int(match_6.group(2))
-            year = 2000 + int(match_6.group(3))
+            day = int(match_6.group(3))
             return pd.Timestamp(year=year, month=month, day=day)
         except Exception:
             pass
@@ -2210,12 +2210,15 @@ def render_operations_section(visao_painel: str):
 
     arquivo_escolhido = None
     arquivo_upload = None
+    arquivo_anterior = None
+    arquivo_anterior_auto = None
 
     if arquivos_excel:
         nomes_arquivos = [a.name for a in arquivos_excel]
+
         col_a, col_b = st.columns([3, 1])
         with col_a:
-            arquivo_escolhido_nome = st.selectbox("Selecione a planilha", options=nomes_arquivos, index=0, key="pipeline_file_select")
+            arquivo_escolhido_nome = st.selectbox("Selecione a planilha base", options=nomes_arquivos, index=0, key="pipeline_file_select")
         with col_b:
             usar_mais_recente = st.checkbox("Usar mais recente", value=True, key="pipeline_use_latest")
 
@@ -2223,6 +2226,31 @@ def render_operations_section(visao_painel: str):
             arquivo_escolhido = arquivos_excel[0]
         else:
             arquivo_escolhido = next(a for a in arquivos_excel if a.name == arquivo_escolhido_nome)
+
+        arquivo_anterior_auto = find_previous_file_by_name(arquivos_excel, arquivo_escolhido)
+        opcoes_comparativo = [a for a in arquivos_excel if a.name != arquivo_escolhido.name]
+        nomes_comparativo = [a.name for a in opcoes_comparativo]
+
+        idx_comparativo = 0
+        if arquivo_anterior_auto is not None and arquivo_anterior_auto.name in nomes_comparativo:
+            idx_comparativo = nomes_comparativo.index(arquivo_anterior_auto.name)
+
+        col_c, col_d = st.columns([3, 1])
+        with col_c:
+            arquivo_anterior_nome = st.selectbox(
+                "Selecione a planilha comparativa",
+                options=nomes_comparativo if nomes_comparativo else ["Sem comparativo disponível"],
+                index=idx_comparativo if nomes_comparativo else 0,
+                key="pipeline_compare_file_select",
+            )
+        with col_d:
+            usar_comparativo_automatico = st.checkbox("Usar comparativo automático", value=True, key="pipeline_use_auto_compare")
+
+        if usar_comparativo_automatico:
+            arquivo_anterior = arquivo_anterior_auto
+        else:
+            if nomes_comparativo and arquivo_anterior_nome != "Sem comparativo disponível":
+                arquivo_anterior = next(a for a in opcoes_comparativo if a.name == arquivo_anterior_nome)
     else:
         arquivo_upload = st.file_uploader(
             "Envie a planilha Pipeline",
@@ -2260,13 +2288,7 @@ def render_operations_section(visao_painel: str):
         return
 
     df_anterior = pd.DataFrame()
-    arquivo_anterior = None
     try:
-        if arquivo_escolhido is not None and arquivos_excel:
-            arquivo_anterior = find_previous_file_by_name(arquivos_excel, arquivo_escolhido)
-        elif arquivo_upload is not None and arquivos_excel:
-            arquivo_anterior = find_previous_file_by_name(arquivos_excel, arquivo_upload.name)
-
         if arquivo_anterior is not None:
             df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
     except Exception:
