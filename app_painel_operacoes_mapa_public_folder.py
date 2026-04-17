@@ -329,12 +329,53 @@ def inject_brand_css():
             margin-bottom: 12px;
         }}
 
+        .metric-value-row {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }}
+
         .metric-value {{
             font-size: 1.65rem;
             font-weight: 800;
             color: {MAPA_NAVY};
             line-height: 1.1;
             word-break: break-word;
+        }}
+
+        .metric-trend {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            flex: 0 0 22px;
+            font-size: 12px;
+            font-weight: 900;
+        }}
+
+        .metric-trend.up {{
+            color: #118A4E;
+            background: rgba(17,138,78,0.10);
+        }}
+
+        .metric-trend.down {{
+            color: #C0392B;
+            background: rgba(192,57,43,0.10);
+        }}
+
+        .metric-trend.flat {{
+            background: rgba(96,113,123,0.08);
+            position: relative;
+        }}
+
+        .metric-trend.flat::before {{
+            content: "";
+            width: 12px;
+            border-top: 2px dashed #60717B;
+            display: block;
         }}
 
         .metric-sub {{
@@ -480,12 +521,64 @@ def extract_folder_id(value: str | None) -> str:
     return ""
 
 
+def extract_reference_date_from_name(path_or_name) -> pd.Timestamp | None:
+    name = Path(path_or_name).name.lower() if not isinstance(path_or_name, Path) else path_or_name.name.lower()
+
+    match_8 = re.search(r"(?<!\d)(20\d{2})[^0-9]?(\d{2})[^0-9]?(\d{2})(?!\d)", name)
+    if match_8:
+        try:
+            return pd.Timestamp(year=int(match_8.group(1)), month=int(match_8.group(2)), day=int(match_8.group(3)))
+        except Exception:
+            pass
+
+    match_6 = re.search(r"(?<!\d)(\d{2})[^0-9]?(\d{2})[^0-9]?(\d{2})(?!\d)", name)
+    if match_6:
+        try:
+            day = int(match_6.group(1))
+            month = int(match_6.group(2))
+            year = 2000 + int(match_6.group(3))
+            return pd.Timestamp(year=year, month=month, day=day)
+        except Exception:
+            pass
+
+    return None
+
+
 def infer_sort_key_from_name(path: Path):
     name = path.name.lower()
-    date_match = re.search(r"(20\d{2})[^0-9]?(\d{2})[^0-9]?(\d{2})", name)
-    if date_match:
-        return ("".join(date_match.groups()), name)
+    ref_date = extract_reference_date_from_name(path)
+    if ref_date is not None and pd.notna(ref_date):
+        return (ref_date.strftime("%Y%m%d"), name)
     return ("", name)
+
+
+def find_previous_file_by_name(files, current_file):
+    if not files:
+        return None
+
+    current_name = current_file.name if isinstance(current_file, Path) else str(current_file)
+    current_date = extract_reference_date_from_name(current_name)
+
+    dated_files = []
+    for item in files:
+        ref_date = extract_reference_date_from_name(item)
+        if ref_date is not None and pd.notna(ref_date):
+            dated_files.append((ref_date, item))
+
+    if current_date is not None and pd.notna(current_date):
+        anteriores = [(ref_date, item) for ref_date, item in dated_files if ref_date < current_date]
+        if anteriores:
+            anteriores.sort(key=lambda x: x[0], reverse=True)
+            return anteriores[0][1]
+
+    ordered = sorted(files, key=infer_sort_key_from_name, reverse=True)
+    names = [item.name for item in ordered]
+    if current_name in names:
+        idx = names.index(current_name)
+        if idx + 1 < len(ordered):
+            return ordered[idx + 1]
+
+    return ordered[1] if len(ordered) > 1 else None
 
 
 @st.cache_data(show_spinner=False, ttl=600)
@@ -873,12 +966,38 @@ def build_operation_color_sequence(operation_names):
     return sequence
 
 
-def metric_card(label, value, sub=None):
+def compare_metric_direction(current_value, previous_value, tolerance: float = 1e-9) -> str:
+    try:
+        current_value = float(current_value)
+        previous_value = float(previous_value)
+    except Exception:
+        return "flat"
+
+    diff = current_value - previous_value
+    if abs(diff) <= tolerance:
+        return "flat"
+    return "up" if diff > 0 else "down"
+
+
+def metric_trend_icon(trend: str) -> str:
+    trend = str(trend or "flat").strip().lower()
+    if trend == "up":
+        return '<span class="metric-trend up">▲</span>'
+    if trend == "down":
+        return '<span class="metric-trend down">▼</span>'
+    return '<span class="metric-trend flat"></span>'
+
+
+def metric_card(label, value, sub=None, trend="flat"):
     sub_html = f'<div class="metric-sub">{escape(str(sub))}</div>' if sub else ''
+    trend_html = metric_trend_icon(trend)
     return f"""
     <div class="metric-card">
         <div class="metric-label">{escape(label)}</div>
-        <div class="metric-value">{escape(value)}</div>
+        <div class="metric-value-row">
+            <div class="metric-value">{escape(value)}</div>
+            {trend_html}
+        </div>
         {sub_html}
     </div>
     """
@@ -1340,6 +1459,33 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
         & apply_multiselect_filter(df_base["prioridade"], f_prioridade)
         & apply_multiselect_filter(mandato_series, f_mandato)
     )
+    filter_state = {
+        "responsavel": f_responsavel,
+        "status": f_status,
+        "operacao": f_operacao,
+        "prioridade": f_prioridade,
+        "mandato": f_mandato,
+    }
+    return df_base.loc[mask].reset_index(drop=True).copy(), filter_state
+
+
+def apply_dashboard_filter_state(df_base: pd.DataFrame, filter_state: dict | None) -> pd.DataFrame:
+    if df_base is None or df_base.empty:
+        return pd.DataFrame()
+
+    if not filter_state:
+        return df_base.reset_index(drop=True).copy()
+
+    mandato_series = df_base["mandato_filtro"] if "mandato_filtro" in df_base.columns else df_base["mandato"].apply(normalize_mandato_value)
+
+    mask = (
+        apply_multiselect_filter(df_base["responsavel"], filter_state.get("responsavel"))
+        & apply_multiselect_filter(df_base["status"], filter_state.get("status"))
+        & apply_multiselect_filter(df_base["operacao"], filter_state.get("operacao"))
+        & apply_multiselect_filter(df_base["prioridade"], filter_state.get("prioridade"))
+        & apply_multiselect_filter(mandato_series, filter_state.get("mandato"))
+    )
+
     return df_base.loc[mask].reset_index(drop=True).copy()
 
 
@@ -1351,7 +1497,7 @@ def build_filtered_dashboard_view(df_filtrado: pd.DataFrame) -> pd.DataFrame:
     return df_filtrado.reset_index(drop=True).copy()
 
 
-def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
+def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None):
     total_operacoes = len(df_filtrado)
     valor_total = df_filtrado["valor_operacao"].sum()
     valor_ponderado = df_filtrado["valor_ponderado"].sum()
@@ -1359,19 +1505,34 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     comissao_mapa_ponderada = df_filtrado["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_filtrado.columns else 0
     ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
 
+    if df_anterior is None or df_anterior.empty:
+        total_operacoes_ant = total_operacoes
+        valor_total_ant = valor_total
+        valor_ponderado_ant = valor_ponderado
+        comissao_mapa_total_ant = comissao_mapa_total
+        comissao_mapa_ponderada_ant = comissao_mapa_ponderada
+        ticket_medio_ant = ticket_medio
+    else:
+        total_operacoes_ant = len(df_anterior)
+        valor_total_ant = df_anterior["valor_operacao"].sum()
+        valor_ponderado_ant = df_anterior["valor_ponderado"].sum()
+        comissao_mapa_total_ant = df_anterior["comissao_mapa"].sum()
+        comissao_mapa_ponderada_ant = df_anterior["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_anterior.columns else 0
+        ticket_medio_ant = df_anterior["valor_operacao"].mean() if len(df_anterior) > 0 else 0
+
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
-        st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}", trend=compare_metric_direction(total_operacoes, total_operacoes_ant)), unsafe_allow_html=True)
     with m2:
-        st.markdown(metric_card("Valor Total", format_brl_card(valor_total), f"Volume bruto | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Total", format_brl_card(valor_total), f"Volume bruto | {escopo}", trend=compare_metric_direction(valor_total, valor_total_ant)), unsafe_allow_html=True)
     with m3:
-        st.markdown(metric_card("Valor Ponderado", format_brl_card(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado", format_brl_card(valor_ponderado), f"Chance de fechamento (20% / 10% / 1%) | {escopo}", trend=compare_metric_direction(valor_ponderado, valor_ponderado_ant)), unsafe_allow_html=True)
     with m4:
-        st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}", trend=compare_metric_direction(comissao_mapa_total, comissao_mapa_total_ant)), unsafe_allow_html=True)
     with m5:
-        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}", trend=compare_metric_direction(comissao_mapa_ponderada, comissao_mapa_ponderada_ant)), unsafe_allow_html=True)
     with m6:
-        st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
+        st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant)), unsafe_allow_html=True)
 
 
 def render_empty_state(title: str, message: str):
@@ -1640,7 +1801,7 @@ def render_consolidated_tables(df_filtrado: pd.DataFrame):
     )
 
 
-def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
+def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
@@ -1650,12 +1811,13 @@ def render_dashboard_page(df_page_base: pd.DataFrame, key_prefix: str, escopo: s
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    df_filtrado = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
+    df_filtrado, filter_state = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
     df_visao = build_filtered_dashboard_view(df_filtrado)
+    df_visao_anterior = apply_dashboard_filter_state(df_page_base_anterior, filter_state)
 
     st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
 
-    render_metric_cards(df_visao, escopo=escopo)
+    render_metric_cards(df_visao, escopo=escopo, df_anterior=df_visao_anterior)
     render_charts(df_visao)
 
     if page_mode == "consolidado":
@@ -2073,11 +2235,14 @@ def render_operations_section(visao_painel: str):
 
     arquivo_label = arquivo_escolhido.name if arquivo_escolhido else (arquivo_upload.name if arquivo_upload else "Nenhum arquivo selecionado")
 
+    arquivo_anterior_label = arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior"
+
     st.markdown(
         f"""
         <div class="meta-bar" style="margin-top:10px;">
             <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
             <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
+            <span class="meta-pill"><span class="dot"></span>Comparativo: {escape(arquivo_anterior_label)}</span>
         </div>
         </div>
         """,
@@ -2096,6 +2261,19 @@ def render_operations_section(visao_painel: str):
     except Exception as e:
         st.error(f"Erro ao ler a planilha: {e}")
         return
+
+    df_anterior = pd.DataFrame()
+    arquivo_anterior = None
+    try:
+        if arquivo_escolhido is not None and arquivos_excel:
+            arquivo_anterior = find_previous_file_by_name(arquivos_excel, arquivo_escolhido)
+        elif arquivo_upload is not None and arquivos_excel:
+            arquivo_anterior = find_previous_file_by_name(arquivos_excel, arquivo_upload.name)
+
+        if arquivo_anterior is not None:
+            df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
+    except Exception:
+        df_anterior = pd.DataFrame()
 
     if df.empty:
         st.warning("Nenhum registro válido foi encontrado na aba 'Pipeline'.")
@@ -2116,6 +2294,7 @@ def render_operations_section(visao_painel: str):
     if visao_painel == "Consolidado":
         render_dashboard_page(
             df_page_base=df.copy(),
+            df_page_base_anterior=df_anterior.copy(),
             key_prefix="consolidado",
             escopo="consolidado",
             filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
@@ -2124,6 +2303,7 @@ def render_operations_section(visao_painel: str):
     elif visao_painel == "Top Five":
         render_dashboard_page(
             df_page_base=df[is_top_five(df["top_five"])].copy(),
+            df_page_base_anterior=df_anterior[is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
             key_prefix="top_five",
             escopo="Top Five",
             filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
@@ -2132,6 +2312,7 @@ def render_operations_section(visao_painel: str):
     else:
         render_dashboard_page(
             df_page_base=df[~is_top_five(df["top_five"])].copy(),
+            df_page_base_anterior=df_anterior[~is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
             key_prefix="secundarias",
             escopo="Secundárias",
             filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
