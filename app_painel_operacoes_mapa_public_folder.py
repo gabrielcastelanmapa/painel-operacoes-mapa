@@ -2374,18 +2374,18 @@ def build_operations_figures_for_print(df_filtrado: pd.DataFrame):
     base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
     base_status = base_status.sort_values("status")
     fig_status = px.bar(base_status, x="status", y="valor_operacao", title="Valor por status", text_auto=True, color_discrete_sequence=[MAPA_TEAL], category_orders={"status": status_order})
-    fig_status.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Valor da operação", margin=dict(l=20, r=10, t=50, b=20), height=260)
-    figs.append(fig_status)
+    fig_status.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_status))
 
     base_resp = df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
     fig_resp = px.bar(base_resp, x="responsavel", y="valor_operacao", title="Valor por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
-    fig_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Valor da operação", margin=dict(l=20, r=10, t=50, b=20), height=260)
-    figs.append(fig_resp)
+    fig_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_resp))
 
     base_oper = df_filtrado.groupby("operacao", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
     fig_oper = px.pie(base_oper, names="operacao", values="valor_operacao", title="Distribuição por tipo de operação", color_discrete_sequence=build_operation_color_sequence(base_oper["operacao"].tolist()), hole=0.42)
     fig_oper.update_traces(sort=False, marker=dict(line=dict(color="#FFFFFF", width=2)), textposition="inside", textinfo="percent")
-    fig_oper.update_layout(paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), margin=dict(l=20, r=10, t=50, b=20), height=260, legend_title_text="")
+    fig_oper.update_layout(paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), margin=dict(l=10, r=10, t=45, b=20), height=320, legend_title_text="", legend=dict(font=dict(size=9), orientation="v"))
     figs.append(fig_oper)
 
     base_chance = df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"].sum().reset_index()
@@ -2394,19 +2394,19 @@ def build_operations_figures_for_print(df_filtrado: pd.DataFrame):
     base_chance["chance_fechamento"] = pd.Categorical(base_chance["chance_fechamento"], categories=chance_order, ordered=True)
     base_chance = base_chance.sort_values("chance_fechamento")
     fig_chance = px.bar(base_chance, x="chance_fechamento", y="valor_operacao", title="Valor por chance de fechamento", text_auto=True, color_discrete_sequence=[MAPA_TEAL_2], category_orders={"chance_fechamento": chance_order})
-    fig_chance.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Valor da operação", margin=dict(l=20, r=10, t=50, b=20), height=260)
-    figs.append(fig_chance)
+    fig_chance.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_chance))
 
     base_qtd_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
     fig_qtd_resp = px.bar(base_qtd_resp, x="responsavel", y="quantidade", title="Quantidade por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
     fig_qtd_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de operações", margin=dict(l=20, r=10, t=50, b=20), height=260)
-    figs.append(fig_qtd_resp)
+    figs.append(tune_print_figure_axes(fig_qtd_resp))
 
     alta_mask = df_filtrado["chance_fechamento"].fillna("").astype(str).str.strip().eq("1 - Alta")
     base_qtd_alta = df_filtrado[alta_mask].groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
     fig_qtd_alta = px.bar(base_qtd_alta, x="responsavel", y="quantidade", title="Quantidade de alta chance por responsável", text_auto=True, color_discrete_sequence=[MAPA_TEAL])
     fig_qtd_alta.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de operações", margin=dict(l=20, r=10, t=50, b=20), height=260)
-    figs.append(fig_qtd_alta)
+    figs.append(tune_print_figure_axes(fig_qtd_alta))
 
     return figs
 
@@ -2420,13 +2420,13 @@ def build_document_figures_for_print(df_filtrado: pd.DataFrame):
     base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
     base_status = base_status.sort_values("status")
     fig_status = px.bar(base_status, x="status", y="quantidade", title="Documentos por status", text_auto=True, color_discrete_sequence=[MAPA_TEAL], category_orders={"status": status_order})
-    fig_status.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280)
-    figs.append(fig_status)
+    fig_status.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_status))
 
     base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
     fig_resp = px.bar(base_resp, x="responsavel", y="quantidade", title="Documentos por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
-    fig_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280)
-    figs.append(fig_resp)
+    fig_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_resp))
 
     base_prio = df_filtrado.groupby("prioridade", dropna=False).size().reset_index(name="quantidade")
     base_prio["prioridade"] = base_prio["prioridade"].apply(normalize_category_text)
@@ -2434,8 +2434,8 @@ def build_document_figures_for_print(df_filtrado: pd.DataFrame):
     base_prio["prioridade"] = pd.Categorical(base_prio["prioridade"], categories=prio_order, ordered=True)
     base_prio = base_prio.sort_values("prioridade")
     fig_prio = px.bar(base_prio, x="prioridade", y="quantidade", title="Documentos por prioridade", text_auto=True, color_discrete_sequence=[MAPA_DARK_TEAL], category_orders={"prioridade": prio_order})
-    fig_prio.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280)
-    figs.append(fig_prio)
+    fig_prio.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_prio))
 
     prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
     base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
@@ -2445,11 +2445,20 @@ def build_document_figures_for_print(df_filtrado: pd.DataFrame):
     fig_prazo = px.bar(base_prazo, x="faixa_prazo", y="quantidade", title="Documentos por faixa de prazo", text_auto=True, color="faixa_prazo", category_orders={"faixa_prazo": faixa_order}, color_discrete_map={
         "Vencido": "#C0392B", "1-14 dias": "#F4A6A6", "15-30 dias": MAPA_TEAL_2, "31-90 dias": MAPA_TEAL, "91+ dias": MAPA_NAVY_2, "Sem prazo": "#98A6B8",
     })
-    fig_prazo.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280, showlegend=False)
-    figs.append(fig_prazo)
+    fig_prazo.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=15, color=MAPA_NAVY), xaxis_title="", yaxis_title="", margin=dict(l=20, r=10, t=45, b=55), height=320, showlegend=False, uniformtext_minsize=8, uniformtext_mode="hide")
+    figs.append(tune_print_figure_axes(fig_prazo))
 
     return figs
 
+
+
+def tune_print_figure_axes(fig):
+    try:
+        fig.update_xaxes(tickangle=-30, automargin=True)
+        fig.update_yaxes(automargin=True)
+    except Exception:
+        pass
+    return fig
 
 def figure_grid_html(figs, columns=2):
     chart_blocks = []
@@ -2597,7 +2606,7 @@ def build_operations_print_html(title: str, filter_state: dict, df_visao: pd.Dat
         "Mandato": filter_state.get("mandato", []),
     })
     cards_html = build_metric_cards_print_html(metric_values_operations(df_visao))
-    charts_html = figure_grid_html(build_operations_figures_for_print(df_visao), columns=3)
+    charts_html = figure_grid_html(build_operations_figures_for_print(df_visao), columns=2)
     table_html = build_operations_table_html(df_visao)
     return build_print_document_html(f"Painel de Operações | {title}", filter_html, cards_html, charts_html, table_html)
 
