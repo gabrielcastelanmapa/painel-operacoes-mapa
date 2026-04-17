@@ -2235,21 +2235,18 @@ def render_operations_section(visao_painel: str):
 
     arquivo_label = arquivo_escolhido.name if arquivo_escolhido else (arquivo_upload.name if arquivo_upload else "Nenhum arquivo selecionado")
 
-    arquivo_anterior_label = arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior"
-
-    st.markdown(
-        f"""
-        <div class="meta-bar" style="margin-top:10px;">
-            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
-            <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
-            <span class="meta-pill"><span class="dot"></span>Comparativo: {escape(arquivo_anterior_label)}</span>
-        </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     if arquivo_escolhido is None and arquivo_upload is None:
+        st.markdown(
+            f"""
+            <div class="meta-bar" style="margin-top:10px;">
+                <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
+                <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
+                <span class="meta-pill"><span class="dot"></span>Comparativo: Sem comparativo anterior</span>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.error("Nenhum arquivo Excel pôde ser carregado automaticamente. Envie a planilha manualmente ou revise o link/permissão da pasta pública do Google Drive.")
         return
 
@@ -2274,6 +2271,20 @@ def render_operations_section(visao_painel: str):
             df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
     except Exception:
         df_anterior = pd.DataFrame()
+
+    arquivo_anterior_label = arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior"
+
+    st.markdown(
+        f"""
+        <div class="meta-bar" style="margin-top:10px;">
+            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
+            <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
+            <span class="meta-pill"><span class="dot"></span>Comparativo: {escape(arquivo_anterior_label)}</span>
+        </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if df.empty:
         st.warning("Nenhum registro válido foi encontrado na aba 'Pipeline'.")
