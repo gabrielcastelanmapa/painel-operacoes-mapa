@@ -438,6 +438,22 @@ def inject_brand_css():
             background: rgba(232,245,247,0.45);
         }}
 
+        .doc-due-card--overdue {{
+            border-color: rgba(192,57,43,0.55);
+        }}
+
+        .doc-due-card--overdue summary {{
+            background: rgba(192,57,43,0.12);
+        }}
+
+        .doc-due-card--urgent {{
+            border-color: rgba(214,93,14,0.45);
+        }}
+
+        .doc-due-card--urgent summary {{
+            background: rgba(244,166,166,0.24);
+        }}
+
         .doc-due-card summary::-webkit-details-marker {{
             display: none;
         }}
@@ -2468,10 +2484,12 @@ def faixa_prazo_documento(value):
         dias = float(value)
     except Exception:
         return "Sem prazo"
-    if dias < 0:
+    if dias <= 0:
         return "Vencido"
+    if dias < 15:
+        return "1-14 dias"
     if dias <= 30:
-        return "0-30 dias"
+        return "15-30 dias"
     if dias <= 90:
         return "31-90 dias"
     return "91+ dias"
@@ -2497,7 +2515,7 @@ def render_document_filter_block(df_base: pd.DataFrame, key_prefix: str = "docs"
     with c6:
         faixa_sel = st.multiselect(
             "Faixa de prazo",
-            options=["Vencido", "0-30 dias", "31-90 dias", "91+ dias", "Sem prazo"],
+            options=["Vencido", "1-14 dias", "15-30 dias", "31-90 dias", "91+ dias", "Sem prazo"],
             key=f"{key_prefix}_faixa_prazo",
         )
 
@@ -2519,8 +2537,8 @@ def render_document_filter_block(df_base: pd.DataFrame, key_prefix: str = "docs"
 def render_document_metric_cards(df_filtrado: pd.DataFrame):
     total_documentos = len(df_filtrado)
     alta_prioridade = df_filtrado["prioridade"].fillna("").astype(str).str.contains(r"^1", regex=True).sum()
-    vencidos = (pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce") < 0).sum()
-    proximos_30 = pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce").between(0, 30, inclusive="both").sum()
+    vencidos = (pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce") <= 0).sum()
+    proximos_30 = pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce").between(1, 30, inclusive="both").sum()
     valor_total = pd.to_numeric(df_filtrado["valor"], errors="coerce").fillna(0).sum()
 
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -2529,9 +2547,9 @@ def render_document_metric_cards(df_filtrado: pd.DataFrame):
     with m2:
         st.markdown(metric_card("Alta Prioridade", f"{int(alta_prioridade)}", "Prioridade 1 - Alta"), unsafe_allow_html=True)
     with m3:
-        st.markdown(metric_card("Vencidos", f"{int(vencidos)}", "Dias para o prazo final abaixo de zero"), unsafe_allow_html=True)
+        st.markdown(metric_card("Vencidos", f"{int(vencidos)}", "Prazo final igual ou abaixo de zero"), unsafe_allow_html=True)
     with m4:
-        st.markdown(metric_card("Até 30 dias", f"{int(proximos_30)}", "Prazos críticos no curto prazo"), unsafe_allow_html=True)
+        st.markdown(metric_card("Até 30 dias", f"{int(proximos_30)}", "Prazos de 1 a 30 dias"), unsafe_allow_html=True)
     with m5:
         st.markdown(metric_card("Valor Total", format_brl(valor_total), "Soma do valor associado aos documentos"), unsafe_allow_html=True)
 
@@ -2580,10 +2598,26 @@ def render_document_charts(df_filtrado: pd.DataFrame):
     with gc4:
         prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
         base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
-        faixa_order = ["Vencido", "0-30 dias", "31-90 dias", "91+ dias", "Sem prazo"]
+        faixa_order = ["Vencido", "1-14 dias", "15-30 dias", "31-90 dias", "91+ dias", "Sem prazo"]
         base_prazo["faixa_prazo"] = pd.Categorical(base_prazo["faixa_prazo"], categories=faixa_order, ordered=True)
         base_prazo = base_prazo.sort_values("faixa_prazo")
-        fig_prazo = px.bar(base_prazo, x="faixa_prazo", y="quantidade", title="Documentos por faixa de prazo", text_auto=True, color_discrete_sequence=[MAPA_TEAL_2], category_orders={"faixa_prazo": faixa_order})
+        fig_prazo = px.bar(
+            base_prazo,
+            x="faixa_prazo",
+            y="quantidade",
+            title="Documentos por faixa de prazo",
+            text_auto=True,
+            color="faixa_prazo",
+            category_orders={"faixa_prazo": faixa_order},
+            color_discrete_map={
+                "Vencido": "#C0392B",
+                "1-14 dias": "#F4A6A6",
+                "15-30 dias": MAPA_TEAL_2,
+                "31-90 dias": MAPA_TEAL,
+                "91+ dias": MAPA_NAVY_2,
+                "Sem prazo": "#98A6B8",
+            },
+        )
         fig_prazo.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=10, r=10, t=50, b=10))
         st.markdown('<div class="chart-box">', unsafe_allow_html=True)
         st.plotly_chart(fig_prazo, use_container_width=True)
@@ -2596,13 +2630,20 @@ def build_document_due_cards_html(df_responsavel: pd.DataFrame) -> str:
     for _, row in df_responsavel.iterrows():
         nome = row.get("nome_documento") or "Documento sem nome"
         projeto = row.get("projeto") or "Projeto não informado"
-        prazo_restante = format_int_br(row.get("dias_prazo_final"))
+        dias_val = pd.to_numeric(row.get("dias_prazo_final"), errors="coerce")
+        prazo_restante = format_int_br(dias_val)
         observacao = nl2br(row.get("observacoes"))
         acao = nl2br(row.get("acao_sugerida"))
 
+        card_class = "doc-due-card"
+        if pd.notna(dias_val) and dias_val <= 0:
+            card_class += " doc-due-card--overdue"
+        elif pd.notna(dias_val) and dias_val < 15:
+            card_class += " doc-due-card--urgent"
+
         parts.append(
             f"""
-            <details class="doc-due-card">
+            <details class="{card_class}">
                 <summary>
                     <div class="doc-due-title">{escape(str(nome))}</div>
                     <div class="doc-due-meta">{escape(str(projeto))} • Prazo restante: {escape(str(prazo_restante))} dias</div>
@@ -2623,7 +2664,7 @@ def build_document_due_cards_html(df_responsavel: pd.DataFrame) -> str:
 def render_documents_due_soon_by_responsavel(df_filtrado: pd.DataFrame):
     base = df_filtrado.copy()
     prazo = pd.to_numeric(base["dias_prazo_final"], errors="coerce")
-    base = base[prazo.between(0, 30, inclusive="both")].copy()
+    base = base[prazo <= 14].copy()
 
     if base.empty:
         return
@@ -2634,8 +2675,8 @@ def render_documents_due_soon_by_responsavel(df_filtrado: pd.DataFrame):
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<h3 class="subheader-inline">Documentos com vencimento em até 30 dias</h3>', unsafe_allow_html=True)
-    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Listagem agrupada por responsável com foco em documentos que exigem ação no curto prazo.</p>', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Documentos vencidos ou com vencimento em até 14 dias</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Listagem agrupada por responsável com foco nos documentos mais críticos do curto prazo.</p>', unsafe_allow_html=True)
 
     for responsavel, df_resp in base.groupby("responsavel", dropna=False):
         st.markdown(f'<div class="doc-due-group-title">{escape(str(responsavel))}</div>', unsafe_allow_html=True)
