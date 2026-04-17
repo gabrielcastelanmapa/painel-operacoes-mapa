@@ -148,11 +148,12 @@ def inject_brand_css():
         }}
 
         .brand-shell {{
-            background: linear-gradient(135deg, rgba(4,16,78,0.98), rgba(32,144,161,0.92));
+            background: linear-gradient(135deg, #F7FBFC 0%, #EEF6FA 48%, #E0F0F5 100%);
+            border: 1px solid rgba(183,214,226,0.95);
             border-radius: 24px;
             padding: 26px 28px;
-            color: white;
-            box-shadow: 0 18px 40px rgba(4,16,78,0.18);
+            color: {TEXT_DARK};
+            box-shadow: 0 14px 34px rgba(4,16,78,0.08);
             margin-bottom: 18px;
             overflow: hidden;
             position: relative;
@@ -165,7 +166,7 @@ def inject_brand_css():
             top: -80px;
             width: 300px;
             height: 300px;
-            background: radial-gradient(circle, rgba(255,255,255,0.16), rgba(255,255,255,0));
+            background: radial-gradient(circle, rgba(83,180,195,0.22), rgba(83,180,195,0));
             border-radius: 50%;
         }}
 
@@ -181,17 +182,19 @@ def inject_brand_css():
         .brand-logo {{
             width: 100%;
             max-width: 210px;
-            background: rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.9);
+            border: 1px solid rgba(183,214,226,0.9);
             border-radius: 18px;
             padding: 14px;
-            backdrop-filter: blur(2px);
+            box-shadow: 0 10px 24px rgba(4,16,78,0.08);
         }}
 
         .brand-kicker {{
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 0.16em;
-            opacity: 0.88;
+            color: {MAPA_NAVY};
+            opacity: 0.9;
             margin-bottom: 8px;
             font-weight: 700;
         }}
@@ -201,15 +204,20 @@ def inject_brand_css():
             line-height: 1.05;
             margin: 0;
             font-weight: 800;
+            color: {MAPA_NAVY};
         }}
 
         .brand-subtitle {{
             margin-top: 10px;
             margin-bottom: 0;
             font-size: 0.98rem;
-            color: rgba(255,255,255,0.92);
+            color: rgba(18,34,48,0.86);
             max-width: 900px;
             line-height: 1.5;
+        }}
+
+        .brand-subtitle strong {{
+            color: {MAPA_NAVY};
         }}
 
         .chip-row {{
@@ -225,8 +233,9 @@ def inject_brand_css():
             gap: 8px;
             padding: 8px 12px;
             border-radius: 999px;
-            background: rgba(255,255,255,0.14);
-            border: 1px solid rgba(255,255,255,0.22);
+            background: rgba(5,16,78,0.05);
+            border: 1px solid rgba(5,16,78,0.12);
+            color: {MAPA_NAVY_2};
             font-size: 12px;
             font-weight: 700;
         }}
@@ -1319,9 +1328,10 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     valor_total = df_filtrado["valor_operacao"].sum()
     valor_ponderado = df_filtrado["valor_ponderado"].sum()
     comissao_mapa_total = df_filtrado["comissao_mapa"].sum()
+    comissao_mapa_ponderada = df_filtrado["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_filtrado.columns else 0
     ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         st.markdown(metric_card("Nº de Operações", f"{total_operacoes}", f"Quantidade em {escopo}"), unsafe_allow_html=True)
     with m2:
@@ -1331,6 +1341,8 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str):
     with m4:
         st.markdown(metric_card("Comissão MAPA", format_brl_card(comissao_mapa_total), f"Receita bruta potencial | {escopo}"), unsafe_allow_html=True)
     with m5:
+        st.markdown(metric_card("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), f"Comissão ponderada (20% / 10% / 1%) | {escopo}"), unsafe_allow_html=True)
+    with m6:
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}"), unsafe_allow_html=True)
 
 
