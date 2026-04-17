@@ -1,4 +1,5 @@
 import re
+import json
 import tempfile
 from pathlib import Path
 from html import escape
@@ -480,56 +481,6 @@ def inject_brand_css():
 
         .doc-due-body-section {{
             margin-top: 10px;
-        }}
-
-        .print-toolbar {{
-            display: flex;
-            justify-content: flex-end;
-            margin: 8px 0 14px 0;
-        }}
-
-        .print-page {{
-            break-after: page;
-            page-break-after: always;
-        }}
-
-        .print-page:last-child {{
-            break-after: auto;
-            page-break-after: auto;
-        }}
-
-        @page landscapePage {{
-            size: landscape;
-            margin: 12mm;
-        }}
-
-        .print-page-landscape {{
-            page: landscapePage;
-        }}
-
-        @media print {{
-            [data-testid="stSidebar"],
-            [data-testid="stHeader"],
-            .non-printable,
-            .print-toolbar,
-            .brand-shell,
-            button,
-            [data-testid="stFileUploader"],
-            [data-testid="stDownloadButton"] {{
-                display: none !important;
-            }}
-
-            .block-container {{
-                max-width: 100% !important;
-                padding-top: 0 !important;
-                padding-bottom: 0 !important;
-            }}
-
-            .section-card,
-            .chart-box,
-            .metric-card {{
-                box-shadow: none !important;
-            }}
         }}
 
         .metric-card::before {{
@@ -1912,7 +1863,7 @@ def is_top_five(series: pd.Series) -> pd.Series:
 def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd.DataFrame:
     st.markdown(
         f"""
-        <div class="section-card non-printable">
+        <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Filtros executivos</h3>
                 <p class="section-note">{escape(note)}</p>
@@ -2079,7 +2030,7 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
 
 
 def render_empty_state(title: str, message: str):
-    st.markdown('<div class="section-card non-printable">', unsafe_allow_html=True)
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="subheader-inline">{escape(title)}</h3>', unsafe_allow_html=True)
     st.info(message)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -2345,25 +2296,312 @@ def render_consolidated_tables(df_filtrado: pd.DataFrame):
 
 
 
-def render_print_button(key: str, label: str = "Imprimir visão"):
-    st.markdown('<div class="print-toolbar">', unsafe_allow_html=True)
-    if st.button(label, key=key):
-        components.html(
+def format_filter_values_for_print(values):
+    if not values:
+        return "Todos"
+    return ", ".join(str(v) for v in values)
+
+
+def metric_values_operations(df_filtrado: pd.DataFrame):
+    df_metricas = filter_metrics_base(df_filtrado)
+    total_operacoes = len(df_metricas)
+    valor_total = df_metricas["valor_operacao"].sum()
+    valor_ponderado = df_metricas["valor_ponderado"].sum()
+    comissao_mapa_total = df_metricas["comissao_mapa"].sum()
+    comissao_mapa_ponderada = df_metricas["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_metricas.columns else 0
+    ticket_medio = df_metricas["valor_operacao"].mean() if total_operacoes > 0 else 0
+    return [
+        ("Nº de Operações", f"{total_operacoes}", f"Quantidade em operação"),
+        ("Valor Total", format_brl_card(valor_total), "Volume bruto"),
+        ("Valor Ponderado", format_brl_card(valor_ponderado), "Chance de fechamento"),
+        ("Comissão MAPA", format_brl_card(comissao_mapa_total), "Receita potencial"),
+        ("Valor Ponderado, Comissão MAPA", format_brl_card(comissao_mapa_ponderada), "Comissão ponderada"),
+        ("Ticket Médio", format_brl_card(ticket_medio), "Valor médio"),
+    ]
+
+
+def metric_values_documents(df_filtrado: pd.DataFrame):
+    total_documentos = len(df_filtrado)
+    alta_prioridade = df_filtrado["prioridade"].fillna("").astype(str).str.contains(r"^1", regex=True).sum()
+    vencidos = (pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce") <= 0).sum()
+    proximos_30 = pd.to_numeric(df_filtrado["dias_prazo_final"], errors="coerce").between(1, 30, inclusive="both").sum()
+    valor_total = pd.to_numeric(df_filtrado["valor"], errors="coerce").fillna(0).sum()
+    return [
+        ("Nº de Documentos", f"{int(total_documentos)}", "Quantidade no recorte"),
+        ("Alta Prioridade", f"{int(alta_prioridade)}", "Prioridade 1 - Alta"),
+        ("Vencidos", f"{int(vencidos)}", "Prazo final igual ou abaixo de zero"),
+        ("Até 30 dias", f"{int(proximos_30)}", "Prazos de 1 a 30 dias"),
+        ("Valor Total", format_brl_card(valor_total), "Soma do valor associado"),
+    ]
+
+
+def build_metric_cards_print_html(metric_items):
+    cards = []
+    for label, value, sub in metric_items:
+        cards.append(
+            f"""
+            <div class="print-card">
+                <div class="print-card-label">{escape(str(label))}</div>
+                <div class="print-card-value">{escape(str(value))}</div>
+                <div class="print-card-sub">{escape(str(sub))}</div>
+            </div>
             """
+        )
+    return '<div class="print-card-grid">' + "".join(cards) + "</div>"
+
+
+def build_filter_summary_html(filter_map):
+    rows = []
+    for label, values in filter_map.items():
+        rows.append(
+            f"""
+            <div class="print-filter-item">
+                <div class="print-filter-label">{escape(str(label))}</div>
+                <div class="print-filter-value">{escape(format_filter_values_for_print(values))}</div>
+            </div>
+            """
+        )
+    return '<div class="print-filter-grid">' + "".join(rows) + "</div>"
+
+
+def build_operations_figures_for_print(df_filtrado: pd.DataFrame):
+    figs = []
+
+    base_status = df_filtrado.groupby("status", dropna=False)["valor_operacao"].sum().reset_index()
+    base_status["status"] = base_status["status"].apply(normalize_category_text)
+    status_order = order_categories(base_status["status"].tolist())
+    base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
+    base_status = base_status.sort_values("status")
+    fig_status = px.bar(base_status, x="status", y="valor_operacao", title="Valor por status", text_auto=True, color_discrete_sequence=[MAPA_TEAL], category_orders={"status": status_order})
+    fig_status.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Valor da operação", margin=dict(l=20, r=10, t=50, b=20), height=260)
+    figs.append(fig_status)
+
+    base_resp = df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
+    fig_resp = px.bar(base_resp, x="responsavel", y="valor_operacao", title="Valor por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
+    fig_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Valor da operação", margin=dict(l=20, r=10, t=50, b=20), height=260)
+    figs.append(fig_resp)
+
+    base_oper = df_filtrado.groupby("operacao", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
+    fig_oper = px.pie(base_oper, names="operacao", values="valor_operacao", title="Distribuição por tipo de operação", color_discrete_sequence=build_operation_color_sequence(base_oper["operacao"].tolist()), hole=0.42)
+    fig_oper.update_traces(sort=False, marker=dict(line=dict(color="#FFFFFF", width=2)), textposition="inside", textinfo="percent")
+    fig_oper.update_layout(paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), margin=dict(l=20, r=10, t=50, b=20), height=260, legend_title_text="")
+    figs.append(fig_oper)
+
+    base_chance = df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"].sum().reset_index()
+    base_chance["chance_fechamento"] = base_chance["chance_fechamento"].apply(normalize_category_text)
+    chance_order = order_categories(base_chance["chance_fechamento"].tolist())
+    base_chance["chance_fechamento"] = pd.Categorical(base_chance["chance_fechamento"], categories=chance_order, ordered=True)
+    base_chance = base_chance.sort_values("chance_fechamento")
+    fig_chance = px.bar(base_chance, x="chance_fechamento", y="valor_operacao", title="Valor por chance de fechamento", text_auto=True, color_discrete_sequence=[MAPA_TEAL_2], category_orders={"chance_fechamento": chance_order})
+    fig_chance.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Valor da operação", margin=dict(l=20, r=10, t=50, b=20), height=260)
+    figs.append(fig_chance)
+
+    base_qtd_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+    fig_qtd_resp = px.bar(base_qtd_resp, x="responsavel", y="quantidade", title="Quantidade por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
+    fig_qtd_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de operações", margin=dict(l=20, r=10, t=50, b=20), height=260)
+    figs.append(fig_qtd_resp)
+
+    alta_mask = df_filtrado["chance_fechamento"].fillna("").astype(str).str.strip().eq("1 - Alta")
+    base_qtd_alta = df_filtrado[alta_mask].groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+    fig_qtd_alta = px.bar(base_qtd_alta, x="responsavel", y="quantidade", title="Quantidade de alta chance por responsável", text_auto=True, color_discrete_sequence=[MAPA_TEAL])
+    fig_qtd_alta.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de operações", margin=dict(l=20, r=10, t=50, b=20), height=260)
+    figs.append(fig_qtd_alta)
+
+    return figs
+
+
+def build_document_figures_for_print(df_filtrado: pd.DataFrame):
+    figs = []
+
+    base_status = df_filtrado.groupby("status", dropna=False).size().reset_index(name="quantidade")
+    base_status["status"] = base_status["status"].apply(normalize_category_text)
+    status_order = order_categories(base_status["status"].tolist())
+    base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
+    base_status = base_status.sort_values("status")
+    fig_status = px.bar(base_status, x="status", y="quantidade", title="Documentos por status", text_auto=True, color_discrete_sequence=[MAPA_TEAL], category_orders={"status": status_order})
+    fig_status.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280)
+    figs.append(fig_status)
+
+    base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+    fig_resp = px.bar(base_resp, x="responsavel", y="quantidade", title="Documentos por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
+    fig_resp.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280)
+    figs.append(fig_resp)
+
+    base_prio = df_filtrado.groupby("prioridade", dropna=False).size().reset_index(name="quantidade")
+    base_prio["prioridade"] = base_prio["prioridade"].apply(normalize_category_text)
+    prio_order = order_categories(base_prio["prioridade"].tolist())
+    base_prio["prioridade"] = pd.Categorical(base_prio["prioridade"], categories=prio_order, ordered=True)
+    base_prio = base_prio.sort_values("prioridade")
+    fig_prio = px.bar(base_prio, x="prioridade", y="quantidade", title="Documentos por prioridade", text_auto=True, color_discrete_sequence=[MAPA_DARK_TEAL], category_orders={"prioridade": prio_order})
+    fig_prio.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280)
+    figs.append(fig_prio)
+
+    prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
+    base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
+    faixa_order = ["Vencido", "1-14 dias", "15-30 dias", "31-90 dias", "91+ dias", "Sem prazo"]
+    base_prazo["faixa_prazo"] = pd.Categorical(base_prazo["faixa_prazo"], categories=faixa_order, ordered=True)
+    base_prazo = base_prazo.sort_values("faixa_prazo")
+    fig_prazo = px.bar(base_prazo, x="faixa_prazo", y="quantidade", title="Documentos por faixa de prazo", text_auto=True, color="faixa_prazo", category_orders={"faixa_prazo": faixa_order}, color_discrete_map={
+        "Vencido": "#C0392B", "1-14 dias": "#F4A6A6", "15-30 dias": MAPA_TEAL_2, "31-90 dias": MAPA_TEAL, "91+ dias": MAPA_NAVY_2, "Sem prazo": "#98A6B8",
+    })
+    fig_prazo.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=16, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade de documentos", margin=dict(l=20, r=10, t=50, b=20), height=280, showlegend=False)
+    figs.append(fig_prazo)
+
+    return figs
+
+
+def figure_grid_html(figs, columns=2):
+    chart_blocks = []
+    include_js = "cdn"
+    for fig in figs:
+        chart_blocks.append(
+            '<div class="print-chart-card">' +
+            fig.to_html(full_html=False, include_plotlyjs=include_js, config={"displayModeBar": False, "responsive": True}) +
+            '</div>'
+        )
+        include_js = False
+    return f'<div class="print-chart-grid cols-{columns}">' + "".join(chart_blocks) + '</div>'
+
+
+def build_operations_table_html(df_visao: pd.DataFrame):
+    display_df = df_visao.copy()
+    display_df["valor_operacao"] = display_df["valor_operacao"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
+    display_df["comissao_total"] = display_df["comissao_total"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
+    display_df["comissao_mapa"] = display_df["comissao_mapa"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
+    columns = ["top_five", "cliente", "operacao", "prioridade", "status", "responsavel", "chance_fechamento", "valor_operacao", "comissao_total", "comissao_mapa"]
+    rename_map = {
+        "top_five": "Top Five", "cliente": "Cliente", "operacao": "Operação", "prioridade": "Prioridade",
+        "status": "Status", "responsavel": "Responsável", "chance_fechamento": "Chance",
+        "valor_operacao": "Valor da Operação", "comissao_total": "Comissão Total", "comissao_mapa": "Comissão MAPA",
+    }
+    return display_df[columns].rename(columns=rename_map).to_html(index=False, escape=False, border=0, classes="print-table")
+
+
+def build_document_table_html(df_visao: pd.DataFrame):
+    display_df = df_visao.copy()
+    for col in ["data_inclusao", "data_assinatura", "data_cumprimento"]:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(format_date_br)
+    display_df["valor"] = display_df["valor"].apply(lambda x: format_brl(x) if pd.notna(x) and float(x) != 0 else "—")
+    display_df["dias_prazo_final"] = display_df["dias_prazo_final"].apply(format_int_br)
+    cols = ["prioridade", "projeto", "nome_documento", "responsavel", "status", "dias_prazo_final", "observacoes", "acao_sugerida"]
+    rename_map = {
+        "prioridade": "Prioridade", "projeto": "Projeto", "nome_documento": "Nome do Documento",
+        "responsavel": "Responsável", "status": "Status", "dias_prazo_final": "Dias para o prazo final",
+        "observacoes": "Observações", "acao_sugerida": "Ação Sugerida",
+    }
+    return display_df[cols].rename(columns=rename_map).to_html(index=False, escape=False, border=0, classes="print-table")
+
+
+def build_print_document_html(title, filter_html, cards_html, charts_html, table_html):
+    return f"""
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>{escape(title)}</title>
+      <style>
+        @page portraitPage {{ size: A4 portrait; margin: 10mm; }}
+        @page landscapePage {{ size: A4 landscape; margin: 10mm; }}
+        body {{ font-family: Montserrat, Arial, sans-serif; color: #122230; margin: 0; }}
+        .print-page {{ page-break-after: always; padding: 4mm 2mm; }}
+        .portrait {{ page: portraitPage; }}
+        .landscape {{ page: landscapePage; }}
+        .page-title {{ font-size: 22px; font-weight: 800; color: #05104E; margin-bottom: 12px; }}
+        .section-title {{ font-size: 16px; font-weight: 800; color: #16357D; margin: 10px 0 8px 0; }}
+        .print-filter-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }}
+        .print-filter-item {{ border: 1px solid #B7D6E2; border-radius: 10px; padding: 8px 10px; background: #F8FCFD; }}
+        .print-filter-label {{ font-size: 11px; font-weight: 800; color: #62808F; text-transform: uppercase; margin-bottom: 4px; }}
+        .print-filter-value {{ font-size: 12px; line-height: 1.35; }}
+        .print-card-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+        .print-card {{ border: 1px solid #B7D6E2; border-radius: 14px; padding: 12px; background: white; }}
+        .print-card-label {{ font-size: 12px; font-weight: 800; color: #62808F; text-transform: uppercase; margin-bottom: 8px; }}
+        .print-card-value {{ font-size: 26px; font-weight: 800; color: #05104E; line-height: 1.1; }}
+        .print-card-sub {{ margin-top: 8px; font-size: 12px; color: #60717B; }}
+        .print-chart-grid {{ display: grid; gap: 10px; }}
+        .print-chart-grid.cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        .print-chart-grid.cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+        .print-chart-card {{ border: 1px solid #B7D6E2; border-radius: 12px; padding: 6px; background: white; break-inside: avoid; }}
+        .print-table {{ width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }}
+        .print-table th, .print-table td {{ border: 1px solid #D8E4EC; padding: 5px 6px; vertical-align: top; word-wrap: break-word; }}
+        .print-table th {{ background: #EEF6FA; color: #05104E; font-weight: 800; }}
+      </style>
+    </head>
+    <body>
+      <div class="print-page portrait">
+        <div class="page-title">{escape(title)}</div>
+        <div class="section-title">Filtros aplicados</div>
+        {filter_html}
+        <div class="section-title">Cards</div>
+        {cards_html}
+      </div>
+      <div class="print-page landscape">
+        <div class="page-title">{escape(title)} | Gráficos</div>
+        {charts_html}
+      </div>
+      <div class="print-page landscape">
+        <div class="page-title">{escape(title)} | Tabela</div>
+        {table_html}
+      </div>
+    </body>
+    </html>
+    """
+
+
+def trigger_print_html(html_content: str, key: str, label: str):
+    if st.button(label, key=key):
+        payload = json.dumps(html_content)
+        components.html(
+            f"""
             <script>
-                window.parent.print();
+                const html = {payload};
+                const win = window.open('', '_blank');
+                win.document.open();
+                win.document.write(html);
+                win.document.close();
+                setTimeout(() => {{
+                    win.focus();
+                    win.print();
+                }}, 800);
             </script>
             """,
             height=0,
             width=0,
         )
-    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def build_operations_print_html(title: str, filter_state: dict, df_visao: pd.DataFrame):
+    filter_html = build_filter_summary_html({
+        "Responsável": filter_state.get("responsavel", []),
+        "Status": filter_state.get("status", []),
+        "Operação": filter_state.get("operacao", []),
+        "Prioridade": filter_state.get("prioridade", []),
+        "Mandato": filter_state.get("mandato", []),
+    })
+    cards_html = build_metric_cards_print_html(metric_values_operations(df_visao))
+    charts_html = figure_grid_html(build_operations_figures_for_print(df_visao), columns=3)
+    table_html = build_operations_table_html(df_visao)
+    return build_print_document_html(f"Painel de Operações | {title}", filter_html, cards_html, charts_html, table_html)
+
+
+def build_documents_print_html(filter_state: dict, df_visao: pd.DataFrame):
+    filter_html = build_filter_summary_html({
+        "Projeto": filter_state.get("projeto", []),
+        "Prioridade": filter_state.get("prioridade", []),
+        "Status": filter_state.get("status", []),
+        "Tipo de Documento": filter_state.get("tipo_documento", []),
+        "Responsável": filter_state.get("responsavel", []),
+        "Faixa de prazo": filter_state.get("faixa_prazo", []),
+    })
+    cards_html = build_metric_cards_print_html(metric_values_documents(df_visao))
+    charts_html = figure_grid_html(build_document_figures_for_print(df_visao), columns=2)
+    table_html = build_document_table_html(df_visao)
+    return build_print_document_html("Gestão de Documentos", filter_html, cards_html, charts_html, table_html)
 
 
 
 def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, comparative_label: str, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
-    st.markdown('<div class="section-card non-printable">', unsafe_allow_html=True)
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
     st.markdown(
         f'<p class="section-note">Esta seção reúne filtros, métricas, gráficos e tabela(s) da visão {escape(titulo_escopo)}.</p>',
@@ -2371,12 +2609,15 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    render_print_button(key=f"{key_prefix}_print", label=f"Imprimir | {titulo_escopo}")
-
-    st.markdown('<div class="print-page">', unsafe_allow_html=True)
     df_filtrado, filter_state = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
     df_visao = build_filtered_dashboard_view(df_filtrado)
     df_visao_anterior = apply_dashboard_filter_state(df_page_base_anterior, filter_state)
+
+    trigger_print_html(
+        build_operations_print_html(titulo_escopo, filter_state, df_visao),
+        key=f"{key_prefix}_print_html",
+        label=f"Imprimir | {titulo_escopo}",
+    )
 
     st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
 
@@ -2388,13 +2629,8 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
         df_intro_atual=df_page_base,
         df_intro_anterior=df_page_base_anterior,
     )
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="print-page">', unsafe_allow_html=True)
     render_charts(df_visao)
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="print-page print-page-landscape">', unsafe_allow_html=True)
     if page_mode == "consolidado":
         render_consolidated_tables(df_visao)
     elif page_mode == "top_five":
@@ -2417,7 +2653,6 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
             empty_message="Nenhuma operação secundária para os filtros atuais.",
             key_prefix=f"{key_prefix}_tabela",
         )
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 
@@ -2607,7 +2842,15 @@ def render_document_filter_block(df_base: pd.DataFrame, key_prefix: str = "docs"
         faixa_series = df_base["dias_prazo_final"].apply(faixa_prazo_documento)
         mask &= faixa_series.isin(faixa_sel)
 
-    return df_base.loc[mask].reset_index(drop=True).copy()
+    filter_state = {
+        "projeto": projeto_sel,
+        "prioridade": prioridade_sel,
+        "status": status_sel,
+        "tipo_documento": tipo_sel,
+        "responsavel": responsavel_sel,
+        "faixa_prazo": faixa_sel,
+    }
+    return df_base.loc[mask].reset_index(drop=True).copy(), filter_state
 
 
 def render_document_metric_cards(df_filtrado: pd.DataFrame):
@@ -3143,25 +3386,19 @@ def render_document_control_section():
         st.warning("Nenhum registro válido foi encontrado na base de Gestão de Obrigações.")
         return
 
-    render_print_button(key="documentos_print", label="Imprimir | Gestão de Documentos")
+    df_docs_filtrado, docs_filter_state = render_document_filter_block(df_docs, key_prefix="documentos")
 
-    st.markdown('<div class="print-page">', unsafe_allow_html=True)
-    df_docs_filtrado = render_document_filter_block(df_docs, key_prefix="documentos")
+    trigger_print_html(
+        build_documents_print_html(docs_filter_state, df_docs_filtrado),
+        key="documentos_print_html",
+        label="Imprimir | Gestão de Documentos",
+    )
+
     st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
     render_document_metric_cards(df_docs_filtrado)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="print-page">', unsafe_allow_html=True)
     render_document_charts(df_docs_filtrado)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="non-printable">', unsafe_allow_html=True)
     render_documents_due_soon_by_responsavel(df_docs_filtrado)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="print-page print-page-landscape">', unsafe_allow_html=True)
     render_document_table(df_docs_filtrado, legenda_df=legenda_df)
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 sessao_menu, visao_operacoes_menu = render_sidebar_menu()
