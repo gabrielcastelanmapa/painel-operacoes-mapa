@@ -2550,24 +2550,39 @@ def build_print_document_html(title, filter_html, cards_html, charts_html, table
 
 def trigger_print_html(html_content: str, key: str, label: str):
     safe_key = "".join(ch for ch in str(key) if ch.isalnum() or ch in ("_", "-"))
-    html_with_print = html_content.replace(
-        "</body>",
-        "<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 700); };</script></body>",
+    payload = json.dumps(
+        html_content.replace(
+            "</body>",
+            "<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 700); };</script></body>",
+        )
     )
-    payload_b64 = base64.b64encode(html_with_print.encode("utf-8")).decode("utf-8")
     button_html = f"""
     <div style="display:flex; justify-content:flex-end; margin:8px 0 14px 0;">
-        <a id="{safe_key}_link" href="data:text/html;base64,{payload_b64}" target="_blank" style="
+        <button id="{safe_key}_btn" style="
             background:#05104E;
             color:white;
-            text-decoration:none;
+            border:none;
             border-radius:8px;
             padding:10px 16px;
             font-weight:700;
+            cursor:pointer;
             font-family:Montserrat, Arial, sans-serif;
-            display:inline-block;
-        ">{label}</a>
+        ">{label}</button>
     </div>
+    <script>
+        const btn = document.getElementById("{safe_key}_btn");
+        btn.addEventListener("click", function() {{
+            const html = {payload};
+            const blob = new Blob([html], {{ type: "text/html" }});
+            const url = URL.createObjectURL(blob);
+            const win = window.open(url, "_blank");
+            if (!win) {{
+                alert("O navegador bloqueou a nova aba. Libere pop-ups para este site.");
+                return;
+            }}
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+        }});
+    </script>
     """
     components.html(button_html, height=60)
 
