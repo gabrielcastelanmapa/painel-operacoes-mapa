@@ -8,7 +8,6 @@ from difflib import SequenceMatcher
 
 import pandas as pd
 import plotly.express as px
-import matplotlib.pyplot as plt
 import streamlit as st
 import streamlit.components.v1 as components
 from reportlab.lib.pagesizes import A4, landscape
@@ -16,6 +15,10 @@ from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Table, TableStyle
+from reportlab.graphics.shapes import Drawing, String
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.charts.piecharts import Pie
+from reportlab.graphics import renderPDF
 from openpyxl import load_workbook
 
 st.set_page_config(page_title="Painel de Operações | MAPA", layout="wide")
@@ -2700,99 +2703,136 @@ def draw_filter_cards_page(canvas_obj, title, filter_html_map, metric_items, pag
         y -= metric_card_h + 10
 
 
-def build_operations_chart_page_image(df_filtrado: pd.DataFrame):
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
-    axes = axes.flatten()
+
+def fit_labels_for_chart(values, max_len=18):
+    labels = []
+    for value in values:
+        raw = "" if value is None or pd.isna(value) else str(value)
+        labels.append(raw if len(raw) <= max_len else raw[: max_len - 1] + "…")
+    return labels
+
+
+def draw_bar_chart_pdf(canvas_obj, x, y, width, height, title, labels, values, colors_list):
+    drawing = Drawing(width, height)
+    drawing.add(String(0, height - 14, title, fontName="Helvetica-Bold", fontSize=10, fillColor=colors.HexColor(MAPA_NAVY)))
+
+    chart = VerticalBarChart()
+    chart.x = 35
+    chart.y = 30
+    chart.height = height - 55
+    chart.width = width - 50
+    chart.data = [list(values) if values else [0]]
+    chart.strokeColor = colors.transparent
+    chart.valueAxis.strokeColor = colors.HexColor("#D8E4EC")
+    chart.categoryAxis.strokeColor = colors.HexColor("#D8E4EC")
+    chart.categoryAxis.labels.boxAnchor = 'ne'
+    chart.categoryAxis.labels.angle = 25
+    chart.categoryAxis.labels.fontName = "Helvetica"
+    chart.categoryAxis.labels.fontSize = 7
+    chart.categoryAxis.labels.dy = -2
+    chart.categoryAxis.categoryNames = fit_labels_for_chart(labels)
+    chart.barWidth = max(4, min(18, int((chart.width / max(1, len(labels))) * 0.5)))
+    chart.groupSpacing = 6
+    chart.barSpacing = 2
+    if values:
+        chart.valueAxis.valueMin = 0
+        chart.valueAxis.valueMax = max(values) * 1.15 if max(values) > 0 else 1
+    chart.valueAxis.labels.fontName = "Helvetica"
+    chart.valueAxis.labels.fontSize = 7
+    chart.valueAxis.visibleGrid = True
+    chart.valueAxis.gridStrokeColor = colors.HexColor("#EEF3F7")
+
+    if colors_list:
+        chart.bars[0].fillColor = colors.HexColor(colors_list[0])
+        for idx, color_hex in enumerate(colors_list[1:], start=1):
+            if idx < len(chart.bars):
+                chart.bars[idx].fillColor = colors.HexColor(color_hex)
+    else:
+        chart.bars[0].fillColor = colors.HexColor(MAPA_TEAL)
+
+    drawing.add(chart)
+    renderPDF.draw(drawing, canvas_obj, x, y)
+
+
+def draw_pie_chart_pdf(canvas_obj, x, y, width, height, title, labels, values, colors_list):
+    drawing = Drawing(width, height)
+    drawing.add(String(0, height - 14, title, fontName="Helvetica-Bold", fontSize=10, fillColor=colors.HexColor(MAPA_NAVY)))
+
+    pie = Pie()
+    pie.x = 10
+    pie.y = 10
+    pie.width = min(width * 0.55, 180)
+    pie.height = min(height * 0.55, 180)
+    pie.data = list(values) if values else [1]
+    pie.labels = fit_labels_for_chart(labels, max_len=14) if labels else ["Sem dados"]
+    pie.sideLabels = True
+    pie.simpleLabels = False
+    pie.slices.strokeWidth = 0.5
+    pie.slices.strokeColor = colors.white
+    for idx, color_hex in enumerate(colors_list or [MAPA_TEAL]):
+        if idx < len(pie.data):
+            pie.slices[idx].fillColor = colors.HexColor(color_hex)
+    drawing.add(pie)
+    renderPDF.draw(drawing, canvas_obj, x, y)
+
+
+def draw_operations_chart_page_pdf(canvas_obj, df_filtrado: pd.DataFrame, page_size):
+    width, height = page_size
+    draw_pdf_title(canvas_obj, "Painel de Operações | Gráficos", None, page_size)
+
+    positions = [
+        (18, height - 285, (width - 54) / 3, 240),
+        (18 + (width - 54) / 3 + 9, height - 285, (width - 54) / 3, 240),
+        (18 + 2 * ((width - 54) / 3 + 9), height - 285, (width - 54) / 3, 240),
+        (18, 35, (width - 54) / 3, 240),
+        (18 + (width - 54) / 3 + 9, 35, (width - 54) / 3, 240),
+        (18 + 2 * ((width - 54) / 3 + 9), 35, (width - 54) / 3, 240),
+    ]
 
     base_status = df_filtrado.groupby("status", dropna=False)["valor_operacao"].sum().reset_index()
-    base_status["status"] = base_status["status"].apply(normalize_category_text)
-    base_status = base_status.sort_values("status")
-    axes[0].bar(base_status["status"].astype(str), base_status["valor_operacao"], color=MAPA_TEAL)
-    axes[0].set_title("Valor por status", fontsize=12)
-    axes[0].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[0], "Valor por status", base_status["status"].astype(str).tolist(), base_status["valor_operacao"].fillna(0).tolist(), [MAPA_TEAL])
 
     base_resp = df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
-    axes[1].bar(base_resp["responsavel"].astype(str), base_resp["valor_operacao"], color=MAPA_NAVY_2)
-    axes[1].set_title("Valor por responsável", fontsize=12)
-    axes[1].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[1], "Valor por responsável", base_resp["responsavel"].astype(str).tolist(), base_resp["valor_operacao"].fillna(0).tolist(), [MAPA_NAVY_2])
 
     base_oper = df_filtrado.groupby("operacao", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
-    colors_oper = build_operation_color_sequence(base_oper["operacao"].tolist())
-    axes[2].pie(base_oper["valor_operacao"], labels=base_oper["operacao"], autopct='%1.0f%%', colors=colors_oper, textprops={'fontsize': 8}, wedgeprops={'width': 0.45})
-    axes[2].set_title("Distribuição por tipo de operação", fontsize=12)
+    draw_pie_chart_pdf(canvas_obj, *positions[2], "Distribuição por tipo de operação", base_oper["operacao"].astype(str).tolist(), base_oper["valor_operacao"].fillna(0).tolist(), build_operation_color_sequence(base_oper["operacao"].tolist()))
 
     base_chance = df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"].sum().reset_index()
-    base_chance["chance_fechamento"] = base_chance["chance_fechamento"].apply(normalize_category_text)
-    base_chance = base_chance.sort_values("chance_fechamento")
-    axes[3].bar(base_chance["chance_fechamento"].astype(str), base_chance["valor_operacao"], color=MAPA_TEAL_2)
-    axes[3].set_title("Valor por chance de fechamento", fontsize=12)
-    axes[3].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[3], "Valor por chance de fechamento", base_chance["chance_fechamento"].astype(str).tolist(), base_chance["valor_operacao"].fillna(0).tolist(), [MAPA_TEAL_2])
 
     base_qtd_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
-    axes[4].bar(base_qtd_resp["responsavel"].astype(str), base_qtd_resp["quantidade"], color=MAPA_NAVY_2)
-    axes[4].set_title("Quantidade por responsável", fontsize=12)
-    axes[4].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[4], "Quantidade por responsável", base_qtd_resp["responsavel"].astype(str).tolist(), base_qtd_resp["quantidade"].fillna(0).tolist(), [MAPA_NAVY_2])
 
     alta_mask = df_filtrado["chance_fechamento"].fillna("").astype(str).str.strip().eq("1 - Alta")
     base_qtd_alta = df_filtrado[alta_mask].groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
-    axes[5].bar(base_qtd_alta["responsavel"].astype(str), base_qtd_alta["quantidade"], color=MAPA_TEAL)
-    axes[5].set_title("Qtd. alta chance por responsável", fontsize=12)
-    axes[5].tick_params(axis='x', rotation=30)
-
-    fig.tight_layout()
-    bio = BytesIO()
-    fig.savefig(bio, format="png", dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    bio.seek(0)
-    return bio
+    draw_bar_chart_pdf(canvas_obj, *positions[5], "Qtd. alta chance por responsável", base_qtd_alta["responsavel"].astype(str).tolist(), base_qtd_alta["quantidade"].fillna(0).tolist(), [MAPA_TEAL])
 
 
-def build_documents_chart_page_image(df_filtrado: pd.DataFrame):
-    fig, axes = plt.subplots(2, 2, figsize=(16, 9))
-    axes = axes.flatten()
+def draw_documents_chart_page_pdf(canvas_obj, df_filtrado: pd.DataFrame, page_size):
+    width, height = page_size
+    draw_pdf_title(canvas_obj, "Gestão de Documentos | Gráficos", None, page_size)
+
+    positions = [
+        (24, height - 295, (width - 60) / 2, 250),
+        (36 + (width - 60) / 2, height - 295, (width - 60) / 2, 250),
+        (24, 35, (width - 60) / 2, 250),
+        (36 + (width - 60) / 2, 35, (width - 60) / 2, 250),
+    ]
 
     base_status = df_filtrado.groupby("status", dropna=False).size().reset_index(name="quantidade")
-    base_status["status"] = base_status["status"].apply(normalize_category_text)
-    base_status = base_status.sort_values("status")
-    axes[0].bar(base_status["status"].astype(str), base_status["quantidade"], color=MAPA_TEAL)
-    axes[0].set_title("Documentos por status", fontsize=12)
-    axes[0].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[0], "Documentos por status", base_status["status"].astype(str).tolist(), base_status["quantidade"].fillna(0).tolist(), [MAPA_TEAL])
 
     base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
-    axes[1].bar(base_resp["responsavel"].astype(str), base_resp["quantidade"], color=MAPA_NAVY_2)
-    axes[1].set_title("Documentos por responsável", fontsize=12)
-    axes[1].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[1], "Documentos por responsável", base_resp["responsavel"].astype(str).tolist(), base_resp["quantidade"].fillna(0).tolist(), [MAPA_NAVY_2])
 
     base_prio = df_filtrado.groupby("prioridade", dropna=False).size().reset_index(name="quantidade")
-    base_prio["prioridade"] = base_prio["prioridade"].apply(normalize_category_text)
-    base_prio = base_prio.sort_values("prioridade")
-    axes[2].bar(base_prio["prioridade"].astype(str), base_prio["quantidade"], color=MAPA_DARK_TEAL)
-    axes[2].set_title("Documentos por prioridade", fontsize=12)
-    axes[2].tick_params(axis='x', rotation=30)
+    draw_bar_chart_pdf(canvas_obj, *positions[2], "Documentos por prioridade", base_prio["prioridade"].astype(str).tolist(), base_prio["quantidade"].fillna(0).tolist(), [MAPA_DARK_TEAL])
 
     prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
     base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
-    faixa_order = ["Vencido", "1-14 dias", "15-30 dias", "31-90 dias", "91+ dias", "Sem prazo"]
-    base_prazo["faixa_prazo"] = pd.Categorical(base_prazo["faixa_prazo"], categories=faixa_order, ordered=True)
-    base_prazo = base_prazo.sort_values("faixa_prazo")
     color_map = {"Vencido": "#C0392B", "1-14 dias": "#F4A6A6", "15-30 dias": MAPA_TEAL_2, "31-90 dias": MAPA_TEAL, "91+ dias": MAPA_NAVY_2, "Sem prazo": "#98A6B8"}
-    axes[3].bar(base_prazo["faixa_prazo"].astype(str), base_prazo["quantidade"], color=[color_map.get(x, MAPA_TEAL_2) for x in base_prazo["faixa_prazo"].astype(str)])
-    axes[3].set_title("Documentos por faixa de prazo", fontsize=12)
-    axes[3].tick_params(axis='x', rotation=30)
-
-    fig.tight_layout()
-    bio = BytesIO()
-    fig.savefig(bio, format="png", dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    bio.seek(0)
-    return bio
-
-
-def draw_image_full_page(canvas_obj, image_buffer, title, page_size):
-    width, height = page_size
-    draw_pdf_title(canvas_obj, title, None, page_size)
-    img = ImageReader(image_buffer)
-    canvas_obj.drawImage(img, 20, 30, width=width - 40, height=height - 80, preserveAspectRatio=True, anchor='c')
+    draw_bar_chart_pdf(canvas_obj, *positions[3], "Documentos por faixa de prazo", base_prazo["faixa_prazo"].astype(str).tolist(), base_prazo["quantidade"].fillna(0).tolist(), [color_map.get(x, MAPA_TEAL_2) for x in base_prazo["faixa_prazo"].astype(str)])
 
 
 def draw_table_pages(canvas_obj, title, df_display: pd.DataFrame, page_size, rows_per_page=24):
@@ -2840,7 +2880,7 @@ def generate_operations_pdf_bytes(title: str, filter_state: dict, df_visao: pd.D
 
     c.showPage()
     c.setPageSize(landscape(A4))
-    draw_image_full_page(c, build_operations_chart_page_image(df_visao), f"Painel de Operações | {title} | Gráficos", landscape(A4))
+    draw_operations_chart_page_pdf(c, df_visao, landscape(A4))
 
     c.showPage()
     c.setPageSize(landscape(A4))
@@ -2875,7 +2915,7 @@ def generate_documents_pdf_bytes(filter_state: dict, df_visao: pd.DataFrame):
 
     c.showPage()
     c.setPageSize(landscape(A4))
-    draw_image_full_page(c, build_documents_chart_page_image(df_visao), "Gestão de Documentos | Gráficos", landscape(A4))
+    draw_documents_chart_page_pdf(c, df_visao, landscape(A4))
 
     c.showPage()
     c.setPageSize(landscape(A4))
