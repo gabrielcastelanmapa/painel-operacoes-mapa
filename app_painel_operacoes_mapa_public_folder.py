@@ -1,5 +1,6 @@
 import re
 import json
+from io import BytesIO
 import tempfile
 from pathlib import Path
 from html import escape
@@ -7,8 +8,14 @@ from difflib import SequenceMatcher
 
 import pandas as pd
 import plotly.express as px
+import matplotlib.pyplot as plt
 import streamlit as st
 import streamlit.components.v1 as components
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Table, TableStyle
 from openpyxl import load_workbook
 
 st.set_page_config(page_title="Painel de Operações | MAPA", layout="wide")
@@ -2599,6 +2606,297 @@ def build_documents_print_html(filter_state: dict, df_visao: pd.DataFrame):
 
 
 
+
+def wrap_text_lines(text_value, max_chars=55):
+    raw = "" if text_value is None or pd.isna(text_value) else str(text_value)
+    words = raw.split()
+    if not words:
+        return [""]
+    lines, current = [], ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def draw_pdf_title(canvas_obj, title, subtitle=None, page_size=A4):
+    width, height = page_size
+    canvas_obj.setFillColor(colors.HexColor(MAPA_NAVY))
+    canvas_obj.setFont("Helvetica-Bold", 18)
+    canvas_obj.drawString(24, height - 34, title)
+    if subtitle:
+        canvas_obj.setFillColor(colors.HexColor(TEXT_DARK))
+        canvas_obj.setFont("Helvetica", 10)
+        canvas_obj.drawString(24, height - 50, subtitle)
+
+
+def draw_filter_cards_page(canvas_obj, title, filter_html_map, metric_items, page_size=A4):
+    width, height = page_size
+    draw_pdf_title(canvas_obj, title, "Página 1 | Filtros e cards")
+    y = height - 78
+
+    canvas_obj.setFillColor(colors.HexColor(MAPA_NAVY_2))
+    canvas_obj.setFont("Helvetica-Bold", 12)
+    canvas_obj.drawString(24, y, "Filtros aplicados")
+    y -= 14
+
+    card_w = (width - 60) / 2
+    x_positions = [24, 36 + card_w]
+    card_h = 58
+
+    items = list(filter_html_map.items())
+    for idx in range(0, len(items), 2):
+        row_items = items[idx:idx+2]
+        max_h = card_h
+        for col_idx, (label, value) in enumerate(row_items):
+            x = x_positions[col_idx]
+            canvas_obj.setFillColor(colors.white)
+            canvas_obj.setStrokeColor(colors.HexColor(MAPA_BORDER))
+            canvas_obj.roundRect(x, y - card_h, card_w, card_h, 8, fill=1, stroke=1)
+            canvas_obj.setFillColor(colors.HexColor("#62808F"))
+            canvas_obj.setFont("Helvetica-Bold", 9)
+            canvas_obj.drawString(x + 10, y - 14, label.upper())
+            canvas_obj.setFillColor(colors.HexColor(TEXT_DARK))
+            canvas_obj.setFont("Helvetica", 9)
+            value_lines = wrap_text_lines(value, 42)
+            for line_idx, line in enumerate(value_lines[:3]):
+                canvas_obj.drawString(x + 10, y - 28 - (line_idx * 10), line)
+            max_h = max(max_h, 40 + min(len(value_lines), 3) * 10)
+        y -= max_h + 8
+
+    y -= 6
+    canvas_obj.setFillColor(colors.HexColor(MAPA_NAVY_2))
+    canvas_obj.setFont("Helvetica-Bold", 12)
+    canvas_obj.drawString(24, y, "Cards")
+    y -= 16
+
+    metric_card_w = (width - 84) / 3
+    metric_card_h = 72
+    metric_xs = [24, 36 + metric_card_w, 48 + metric_card_w * 2]
+
+    for idx in range(0, len(metric_items), 3):
+        row_items = metric_items[idx:idx+3]
+        for col_idx, (label, value, sub) in enumerate(row_items):
+            x = metric_xs[col_idx]
+            canvas_obj.setFillColor(colors.white)
+            canvas_obj.setStrokeColor(colors.HexColor(MAPA_BORDER))
+            canvas_obj.roundRect(x, y - metric_card_h, metric_card_w, metric_card_h, 10, fill=1, stroke=1)
+            canvas_obj.setFillColor(colors.HexColor("#62808F"))
+            canvas_obj.setFont("Helvetica-Bold", 9)
+            canvas_obj.drawString(x + 10, y - 14, label.upper())
+            canvas_obj.setFillColor(colors.HexColor(MAPA_NAVY))
+            canvas_obj.setFont("Helvetica-Bold", 16)
+            canvas_obj.drawString(x + 10, y - 34, value)
+            canvas_obj.setFillColor(colors.HexColor("#60717B"))
+            canvas_obj.setFont("Helvetica", 8)
+            for line_idx, line in enumerate(wrap_text_lines(sub, 26)[:2]):
+                canvas_obj.drawString(x + 10, y - 50 - (line_idx * 9), line)
+        y -= metric_card_h + 10
+
+
+def build_operations_chart_page_image(df_filtrado: pd.DataFrame):
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    axes = axes.flatten()
+
+    base_status = df_filtrado.groupby("status", dropna=False)["valor_operacao"].sum().reset_index()
+    base_status["status"] = base_status["status"].apply(normalize_category_text)
+    base_status = base_status.sort_values("status")
+    axes[0].bar(base_status["status"].astype(str), base_status["valor_operacao"], color=MAPA_TEAL)
+    axes[0].set_title("Valor por status", fontsize=12)
+    axes[0].tick_params(axis='x', rotation=30)
+
+    base_resp = df_filtrado.groupby("responsavel", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
+    axes[1].bar(base_resp["responsavel"].astype(str), base_resp["valor_operacao"], color=MAPA_NAVY_2)
+    axes[1].set_title("Valor por responsável", fontsize=12)
+    axes[1].tick_params(axis='x', rotation=30)
+
+    base_oper = df_filtrado.groupby("operacao", dropna=False)["valor_operacao"].sum().reset_index().sort_values("valor_operacao", ascending=False)
+    colors_oper = build_operation_color_sequence(base_oper["operacao"].tolist())
+    axes[2].pie(base_oper["valor_operacao"], labels=base_oper["operacao"], autopct='%1.0f%%', colors=colors_oper, textprops={'fontsize': 8}, wedgeprops={'width': 0.45})
+    axes[2].set_title("Distribuição por tipo de operação", fontsize=12)
+
+    base_chance = df_filtrado.groupby("chance_fechamento", dropna=False)["valor_operacao"].sum().reset_index()
+    base_chance["chance_fechamento"] = base_chance["chance_fechamento"].apply(normalize_category_text)
+    base_chance = base_chance.sort_values("chance_fechamento")
+    axes[3].bar(base_chance["chance_fechamento"].astype(str), base_chance["valor_operacao"], color=MAPA_TEAL_2)
+    axes[3].set_title("Valor por chance de fechamento", fontsize=12)
+    axes[3].tick_params(axis='x', rotation=30)
+
+    base_qtd_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+    axes[4].bar(base_qtd_resp["responsavel"].astype(str), base_qtd_resp["quantidade"], color=MAPA_NAVY_2)
+    axes[4].set_title("Quantidade por responsável", fontsize=12)
+    axes[4].tick_params(axis='x', rotation=30)
+
+    alta_mask = df_filtrado["chance_fechamento"].fillna("").astype(str).str.strip().eq("1 - Alta")
+    base_qtd_alta = df_filtrado[alta_mask].groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+    axes[5].bar(base_qtd_alta["responsavel"].astype(str), base_qtd_alta["quantidade"], color=MAPA_TEAL)
+    axes[5].set_title("Qtd. alta chance por responsável", fontsize=12)
+    axes[5].tick_params(axis='x', rotation=30)
+
+    fig.tight_layout()
+    bio = BytesIO()
+    fig.savefig(bio, format="png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    bio.seek(0)
+    return bio
+
+
+def build_documents_chart_page_image(df_filtrado: pd.DataFrame):
+    fig, axes = plt.subplots(2, 2, figsize=(16, 9))
+    axes = axes.flatten()
+
+    base_status = df_filtrado.groupby("status", dropna=False).size().reset_index(name="quantidade")
+    base_status["status"] = base_status["status"].apply(normalize_category_text)
+    base_status = base_status.sort_values("status")
+    axes[0].bar(base_status["status"].astype(str), base_status["quantidade"], color=MAPA_TEAL)
+    axes[0].set_title("Documentos por status", fontsize=12)
+    axes[0].tick_params(axis='x', rotation=30)
+
+    base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+    axes[1].bar(base_resp["responsavel"].astype(str), base_resp["quantidade"], color=MAPA_NAVY_2)
+    axes[1].set_title("Documentos por responsável", fontsize=12)
+    axes[1].tick_params(axis='x', rotation=30)
+
+    base_prio = df_filtrado.groupby("prioridade", dropna=False).size().reset_index(name="quantidade")
+    base_prio["prioridade"] = base_prio["prioridade"].apply(normalize_category_text)
+    base_prio = base_prio.sort_values("prioridade")
+    axes[2].bar(base_prio["prioridade"].astype(str), base_prio["quantidade"], color=MAPA_DARK_TEAL)
+    axes[2].set_title("Documentos por prioridade", fontsize=12)
+    axes[2].tick_params(axis='x', rotation=30)
+
+    prazo_series = df_filtrado["dias_prazo_final"].apply(faixa_prazo_documento)
+    base_prazo = prazo_series.value_counts(dropna=False).rename_axis("faixa_prazo").reset_index(name="quantidade")
+    faixa_order = ["Vencido", "1-14 dias", "15-30 dias", "31-90 dias", "91+ dias", "Sem prazo"]
+    base_prazo["faixa_prazo"] = pd.Categorical(base_prazo["faixa_prazo"], categories=faixa_order, ordered=True)
+    base_prazo = base_prazo.sort_values("faixa_prazo")
+    color_map = {"Vencido": "#C0392B", "1-14 dias": "#F4A6A6", "15-30 dias": MAPA_TEAL_2, "31-90 dias": MAPA_TEAL, "91+ dias": MAPA_NAVY_2, "Sem prazo": "#98A6B8"}
+    axes[3].bar(base_prazo["faixa_prazo"].astype(str), base_prazo["quantidade"], color=[color_map.get(x, MAPA_TEAL_2) for x in base_prazo["faixa_prazo"].astype(str)])
+    axes[3].set_title("Documentos por faixa de prazo", fontsize=12)
+    axes[3].tick_params(axis='x', rotation=30)
+
+    fig.tight_layout()
+    bio = BytesIO()
+    fig.savefig(bio, format="png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    bio.seek(0)
+    return bio
+
+
+def draw_image_full_page(canvas_obj, image_buffer, title, page_size):
+    width, height = page_size
+    draw_pdf_title(canvas_obj, title, None, page_size)
+    img = ImageReader(image_buffer)
+    canvas_obj.drawImage(img, 20, 30, width=width - 40, height=height - 80, preserveAspectRatio=True, anchor='c')
+
+
+def draw_table_pages(canvas_obj, title, df_display: pd.DataFrame, page_size, rows_per_page=24):
+    width, height = page_size
+    headers = list(df_display.columns)
+    data_rows = [headers] + df_display.astype(str).values.tolist()
+    chunks = [data_rows[:1] + data_rows[i:i+rows_per_page] for i in range(1, len(data_rows), rows_per_page)] or [data_rows[:1]]
+
+    col_count = len(headers)
+    usable_width = width - 30
+    col_width = usable_width / col_count
+    col_widths = [col_width] * col_count
+
+    for idx, chunk in enumerate(chunks):
+        draw_pdf_title(canvas_obj, title, f"Tabela | Página {idx + 1}", page_size)
+        tbl = Table(chunk, colWidths=col_widths, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF6FA")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor(MAPA_NAVY)),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D8E4EC")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEADING", (0, 0), (-1, -1), 7),
+        ]))
+        tw, th = tbl.wrapOn(canvas_obj, usable_width, height - 90)
+        tbl.drawOn(canvas_obj, 15, max(20, height - 70 - th))
+        if idx < len(chunks) - 1:
+            canvas_obj.showPage()
+            canvas_obj.setPageSize(page_size)
+
+
+def generate_operations_pdf_bytes(title: str, filter_state: dict, df_visao: pd.DataFrame):
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+
+    filter_map = {
+        "Responsável": format_filter_values_for_print(filter_state.get("responsavel", [])),
+        "Status": format_filter_values_for_print(filter_state.get("status", [])),
+        "Operação": format_filter_values_for_print(filter_state.get("operacao", [])),
+        "Prioridade": format_filter_values_for_print(filter_state.get("prioridade", [])),
+        "Mandato": format_filter_values_for_print(filter_state.get("mandato", [])),
+    }
+    draw_filter_cards_page(c, f"Painel de Operações | {title}", filter_map, metric_values_operations(df_visao), A4)
+
+    c.showPage()
+    c.setPageSize(landscape(A4))
+    draw_image_full_page(c, build_operations_chart_page_image(df_visao), f"Painel de Operações | {title} | Gráficos", landscape(A4))
+
+    c.showPage()
+    c.setPageSize(landscape(A4))
+    display_df = df_visao.copy()
+    display_df["valor_operacao"] = display_df["valor_operacao"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
+    display_df["comissao_total"] = display_df["comissao_total"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
+    display_df["comissao_mapa"] = display_df["comissao_mapa"].apply(lambda x: format_brl(x) if pd.notna(x) else "—")
+    display_df = display_df[["top_five", "cliente", "operacao", "prioridade", "status", "responsavel", "chance_fechamento", "valor_operacao", "comissao_total", "comissao_mapa"]].rename(columns={
+        "top_five": "Top Five", "cliente": "Cliente", "operacao": "Operação", "prioridade": "Prioridade", "status": "Status",
+        "responsavel": "Responsável", "chance_fechamento": "Chance", "valor_operacao": "Valor da Operação", "comissao_total": "Comissão Total", "comissao_mapa": "Comissão MAPA",
+    })
+    draw_table_pages(c, f"Painel de Operações | {title}", display_df, landscape(A4), rows_per_page=18)
+
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def generate_documents_pdf_bytes(filter_state: dict, df_visao: pd.DataFrame):
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+
+    filter_map = {
+        "Projeto": format_filter_values_for_print(filter_state.get("projeto", [])),
+        "Prioridade": format_filter_values_for_print(filter_state.get("prioridade", [])),
+        "Status": format_filter_values_for_print(filter_state.get("status", [])),
+        "Tipo de Documento": format_filter_values_for_print(filter_state.get("tipo_documento", [])),
+        "Responsável": format_filter_values_for_print(filter_state.get("responsavel", [])),
+        "Faixa de prazo": format_filter_values_for_print(filter_state.get("faixa_prazo", [])),
+    }
+    draw_filter_cards_page(c, "Gestão de Documentos", filter_map, metric_values_documents(df_visao), A4)
+
+    c.showPage()
+    c.setPageSize(landscape(A4))
+    draw_image_full_page(c, build_documents_chart_page_image(df_visao), "Gestão de Documentos | Gráficos", landscape(A4))
+
+    c.showPage()
+    c.setPageSize(landscape(A4))
+    display_df = df_visao.copy()
+    for col in ["data_inclusao", "data_assinatura", "data_cumprimento"]:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(format_date_br)
+    display_df["valor"] = display_df["valor"].apply(lambda x: format_brl(x) if pd.notna(x) and float(x) != 0 else "—")
+    display_df["dias_prazo_final"] = display_df["dias_prazo_final"].apply(format_int_br)
+    display_df = display_df[["prioridade", "projeto", "nome_documento", "responsavel", "status", "dias_prazo_final", "observacoes", "acao_sugerida"]].rename(columns={
+        "prioridade": "Prioridade", "projeto": "Projeto", "nome_documento": "Nome do Documento", "responsavel": "Responsável",
+        "status": "Status", "dias_prazo_final": "Dias para o prazo final", "observacoes": "Observações", "acao_sugerida": "Ação Sugerida",
+    })
+    draw_table_pages(c, "Gestão de Documentos", display_df, landscape(A4), rows_per_page=16)
+
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+
 def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, comparative_label: str, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -2613,10 +2911,12 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
     df_visao = build_filtered_dashboard_view(df_filtrado)
     df_visao_anterior = apply_dashboard_filter_state(df_page_base_anterior, filter_state)
 
-    trigger_print_html(
-        build_operations_print_html(titulo_escopo, filter_state, df_visao),
-        key=f"{key_prefix}_print_html",
-        label=f"Imprimir | {titulo_escopo}",
+    st.download_button(
+        label=f"Baixar PDF | {titulo_escopo}",
+        data=generate_operations_pdf_bytes(titulo_escopo, filter_state, df_visao),
+        file_name=f"painel_operacoes_{titulo_escopo.lower().replace(' ', '_')}.pdf",
+        mime="application/pdf",
+        key=f"{key_prefix}_pdf_download",
     )
 
     st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
@@ -3388,10 +3688,12 @@ def render_document_control_section():
 
     df_docs_filtrado, docs_filter_state = render_document_filter_block(df_docs, key_prefix="documentos")
 
-    trigger_print_html(
-        build_documents_print_html(docs_filter_state, df_docs_filtrado),
-        key="documentos_print_html",
-        label="Imprimir | Gestão de Documentos",
+    st.download_button(
+        label="Baixar PDF | Gestão de Documentos",
+        data=generate_documents_pdf_bytes(docs_filter_state, df_docs_filtrado),
+        file_name="gestao_documentos.pdf",
+        mime="application/pdf",
+        key="documentos_pdf_download",
     )
 
     st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
