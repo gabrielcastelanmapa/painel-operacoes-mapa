@@ -2550,12 +2550,11 @@ def build_print_document_html(title, filter_html, cards_html, charts_html, table
 
 def trigger_print_html(html_content: str, key: str, label: str):
     safe_key = "".join(ch for ch in str(key) if ch.isalnum() or ch in ("_", "-"))
-    payload = json.dumps(
-        html_content.replace(
-            "</body>",
-            "<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 700); };</script></body>",
-        )
+    html_with_print = html_content.replace(
+        "</body>",
+        "<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 700); };</script></body>",
     )
+    payload_b64 = base64.b64encode(html_with_print.encode("utf-8")).decode("utf-8")
     button_html = f"""
     <div style="display:flex; justify-content:flex-end; margin:8px 0 14px 0;">
         <button id="{safe_key}_btn" style="
@@ -2572,7 +2571,9 @@ def trigger_print_html(html_content: str, key: str, label: str):
     <script>
         const btn = document.getElementById("{safe_key}_btn");
         btn.addEventListener("click", function() {{
-            const html = {payload};
+            const b64 = "{payload_b64}";
+            const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+            const html = new TextDecoder("utf-8").decode(bytes);
             const blob = new Blob([html], {{ type: "text/html" }});
             const url = URL.createObjectURL(blob);
             const win = window.open(url, "_blank");
