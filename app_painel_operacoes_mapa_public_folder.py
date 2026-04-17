@@ -1280,32 +1280,17 @@ def render_metric_changes_panel(df_atual: pd.DataFrame, df_anterior: pd.DataFram
 def metric_card(label, value, sub=None, trend="flat", previous_value_label=None, comparative_label="Sem comparativo anterior"):
     sub_html = f'<div class="metric-sub">{escape(str(sub))}</div>' if sub else ''
     trend_html = metric_trend_icon(trend)
-    if previous_value_label:
-        popover_html = f"""
-        <div class="metric-popover">
-            <strong>Base comparativa utilizada:</strong> {escape(comparative_label)}<br/>
-            <strong>Valor na semana anterior:</strong> {escape(previous_value_label)}
-        </div>
-        """
-    else:
-        popover_html = """
-        <div class="metric-popover">
-            <strong>Sem base comparativa disponível.</strong>
-        </div>
-        """
     return f"""
-    <details class="metric-card-wrap">
-        <summary class="metric-card metric-card-summary">
-            <div class="metric-label">{escape(label)}</div>
-            <div class="metric-value-row">
-                <div class="metric-value">{escape(value)}</div>
-                {trend_html}
-            </div>
-            {sub_html}
-        </summary>
-        {popover_html}
-    </details>
+    <div class="metric-card">
+        <div class="metric-label">{escape(label)}</div>
+        <div class="metric-value-row">
+            <div class="metric-value">{escape(value)}</div>
+            {trend_html}
+        </div>
+        {sub_html}
+    </div>
     """
+
 
 
 def make_inline_card_table(df_exibicao: pd.DataFrame) -> str:
