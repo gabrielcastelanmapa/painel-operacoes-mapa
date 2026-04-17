@@ -410,6 +410,62 @@ def inject_brand_css():
             line-height: 1.45;
         }}
 
+        .doc-due-group-title {{
+            margin: 14px 0 8px 0;
+            font-size: 1rem;
+            font-weight: 800;
+            color: {MAPA_NAVY};
+        }}
+
+        .doc-due-grid {{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }}
+
+        .doc-due-card {{
+            border: 1px solid rgba(183,214,226,0.88);
+            border-radius: 16px;
+            background: linear-gradient(180deg, #ffffff 0%, #F8FCFD 100%);
+            box-shadow: 0 10px 24px rgba(4,16,78,0.04);
+            overflow: hidden;
+        }}
+
+        .doc-due-card summary {{
+            list-style: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            background: rgba(232,245,247,0.45);
+        }}
+
+        .doc-due-card summary::-webkit-details-marker {{
+            display: none;
+        }}
+
+        .doc-due-title {{
+            font-size: 0.94rem;
+            font-weight: 800;
+            color: {MAPA_NAVY};
+            margin-bottom: 4px;
+        }}
+
+        .doc-due-meta {{
+            font-size: 0.82rem;
+            color: #60717B;
+            line-height: 1.4;
+        }}
+
+        .doc-due-body {{
+            padding: 14px 16px 16px 16px;
+            font-size: 0.88rem;
+            color: {TEXT_DARK};
+            line-height: 1.55;
+        }}
+
+        .doc-due-body-section {{
+            margin-top: 10px;
+        }}
+
         .metric-card::before {{
             content: "";
             position: absolute;
@@ -2534,6 +2590,61 @@ def render_document_charts(df_filtrado: pd.DataFrame):
         st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+def build_document_due_cards_html(df_responsavel: pd.DataFrame) -> str:
+    parts = ['<div class="doc-due-grid">']
+    for _, row in df_responsavel.iterrows():
+        nome = row.get("nome_documento") or "Documento sem nome"
+        projeto = row.get("projeto") or "Projeto não informado"
+        prazo_restante = format_int_br(row.get("dias_prazo_final"))
+        observacao = nl2br(row.get("observacoes"))
+        acao = nl2br(row.get("acao_sugerida"))
+
+        parts.append(
+            f"""
+            <details class="doc-due-card">
+                <summary>
+                    <div class="doc-due-title">{escape(str(nome))}</div>
+                    <div class="doc-due-meta">{escape(str(projeto))} • Prazo restante: {escape(str(prazo_restante))} dias</div>
+                </summary>
+                <div class="doc-due-body">
+                    <div><strong>Projeto:</strong> {escape(str(projeto))}</div>
+                    <div class="doc-due-body-section"><strong>Prazo restante:</strong> {escape(str(prazo_restante))} dias</div>
+                    <div class="doc-due-body-section"><strong>Observação:</strong><br>{observacao}</div>
+                    <div class="doc-due-body-section"><strong>Ação sugerida:</strong><br>{acao}</div>
+                </div>
+            </details>
+            """
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def render_documents_due_soon_by_responsavel(df_filtrado: pd.DataFrame):
+    base = df_filtrado.copy()
+    prazo = pd.to_numeric(base["dias_prazo_final"], errors="coerce")
+    base = base[prazo.between(0, 30, inclusive="both")].copy()
+
+    if base.empty:
+        return
+
+    base["dias_prazo_final"] = pd.to_numeric(base["dias_prazo_final"], errors="coerce")
+    base["responsavel"] = base["responsavel"].fillna("").astype(str).str.strip().replace("", "Não informado")
+    base = base.sort_values(["responsavel", "dias_prazo_final", "projeto", "nome_documento"])
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Documentos com vencimento em até 30 dias</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Listagem agrupada por responsável com foco em documentos que exigem ação no curto prazo.</p>', unsafe_allow_html=True)
+
+    for responsavel, df_resp in base.groupby("responsavel", dropna=False):
+        st.markdown(f'<div class="doc-due-group-title">{escape(str(responsavel))}</div>', unsafe_allow_html=True)
+        st.markdown(build_document_due_cards_html(df_resp), unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+
 def render_document_table(df_filtrado: pd.DataFrame, legenda_df: pd.DataFrame | None = None):
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -2919,6 +3030,7 @@ def render_document_control_section():
     st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
     render_document_metric_cards(df_docs_filtrado)
     render_document_charts(df_docs_filtrado)
+    render_documents_due_soon_by_responsavel(df_docs_filtrado)
     render_document_table(df_docs_filtrado, legenda_df=legenda_df)
 
 
