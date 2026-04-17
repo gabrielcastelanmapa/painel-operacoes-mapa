@@ -2,6 +2,7 @@ import re
 import tempfile
 from pathlib import Path
 from html import escape
+from difflib import SequenceMatcher
 
 import pandas as pd
 import plotly.express as px
@@ -1256,9 +1257,87 @@ def build_metric_reason_text(metric_name: str, df_atual: pd.DataFrame, df_anteri
     return "Sem explicação adicional disponível para esta métrica."
 
 
+
+def format_operation_intro_line(row: pd.Series) -> str:
+    nome = row.get("compare_key", "Sem identificação")
+    valor = format_brl_card(row.get("valor_operacao", 0))
+    fee = format_brl_card(row.get("comissao_mapa", 0))
+    chance = row.get("chance_fechamento", "-") or "-"
+    return f"- {nome} | Valor: {valor} | Fee MAPA: {fee} | Chance: {chance}"
+
+
+def build_base_change_intro(df_atual: pd.DataFrame, df_anterior: pd.DataFrame):
+    atual = aggregate_operations_for_compare(df_atual)
+    anterior = aggregate_operations_for_compare(df_anterior)
+
+    novos = atual[~atual["compare_key"].isin(anterior["compare_key"])].copy()
+    removidos = anterior[~anterior["compare_key"].isin(atual["compare_key"])].copy()
+
+    pares = []
+    usados_novos = set()
+    usados_removidos = set()
+    candidatos = []
+
+    for _, row_novo in novos.iterrows():
+        for _, row_ant in removidos.iterrows():
+            cliente_score = SequenceMatcher(None, str(row_novo.get("cliente", "")), str(row_ant.get("cliente", ""))).ratio()
+            operacao_score = SequenceMatcher(None, str(row_novo.get("operacao", "")), str(row_ant.get("operacao", ""))).ratio()
+            nome_score = SequenceMatcher(None, str(row_novo.get("compare_key", "")), str(row_ant.get("compare_key", ""))).ratio()
+            score = max(cliente_score, operacao_score, nome_score)
+
+            if score >= 0.55:
+                candidatos.append((score, row_novo.get("compare_key"), row_ant.get("compare_key")))
+
+    candidatos.sort(reverse=True, key=lambda item: item[0])
+
+    for score, key_novo, key_ant in candidatos:
+        if key_novo in usados_novos or key_ant in usados_removidos:
+            continue
+
+        row_novo = novos[novos["compare_key"] == key_novo].iloc[0]
+        row_ant = removidos[removidos["compare_key"] == key_ant].iloc[0]
+
+        pares.append((row_ant, row_novo))
+        usados_novos.add(key_novo)
+        usados_removidos.add(key_ant)
+
+    novos_limpos = novos[~novos["compare_key"].isin(usados_novos)].copy()
+    removidos_limpos = removidos[~removidos["compare_key"].isin(usados_removidos)].copy()
+
+    return novos_limpos, removidos_limpos, pares
+
 def render_metric_changes_panel(df_atual: pd.DataFrame, df_anterior: pd.DataFrame, comparative_label: str):
     with st.expander("Ver mudanças vs base comparativa", expanded=False):
         st.caption(f"Base comparativa utilizada: {comparative_label}")
+
+        novos, removidos, reclassificados = build_base_change_intro(df_atual, df_anterior)
+
+        st.markdown("**Mudanças de escopo da base**")
+        if not novos.empty:
+            st.markdown("**Novas operações**")
+            st.write("\n".join(format_operation_intro_line(row) for _, row in novos.iterrows()))
+        else:
+            st.write("Nenhuma nova operação identificada na base comparativa.")
+
+        if not removidos.empty:
+            st.markdown("**Operações removidas**")
+            st.write("\n".join(format_operation_intro_line(row) for _, row in removidos.iterrows()))
+        else:
+            st.write("Nenhuma operação removida identificada na base comparativa.")
+
+        if reclassificados:
+            st.markdown("**Operações reclassificadas / renomeadas**")
+            linhas = []
+            for row_ant, row_novo in reclassificados:
+                linhas.append(
+                    f"- Antes: {row_ant.get('compare_key')} | Valor: {format_brl_card(row_ant.get('valor_operacao', 0))} | Fee MAPA: {format_brl_card(row_ant.get('comissao_mapa', 0))} | Chance: {row_ant.get('chance_fechamento', '-') or '-'}\n"
+                    f"  Agora: {row_novo.get('compare_key')} | Valor: {format_brl_card(row_novo.get('valor_operacao', 0))} | Fee MAPA: {format_brl_card(row_novo.get('comissao_mapa', 0))} | Chance: {row_novo.get('chance_fechamento', '-') or '-'}"
+                )
+            st.write("\n".join(linhas))
+        else:
+            st.write("Nenhuma reclassificação relevante identificada.")
+
+        st.markdown("---")
 
         col1, col2 = st.columns(2)
         metric_texts = [
@@ -1787,15 +1866,29 @@ def build_filtered_dashboard_view(df_filtrado: pd.DataFrame) -> pd.DataFrame:
     return df_filtrado.reset_index(drop=True).copy()
 
 
-def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None, comparative_label: str = "Sem comparativo anterior"):
-    total_operacoes = len(df_filtrado)
-    valor_total = df_filtrado["valor_operacao"].sum()
-    valor_ponderado = df_filtrado["valor_ponderado"].sum()
-    comissao_mapa_total = df_filtrado["comissao_mapa"].sum()
-    comissao_mapa_ponderada = df_filtrado["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_filtrado.columns else 0
-    ticket_medio = df_filtrado["valor_operacao"].mean() if total_operacoes > 0 else 0
 
-    if df_anterior is None or df_anterior.empty:
+def filter_metrics_base(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    base = df.copy()
+    status_series = base.get("status", pd.Series(index=base.index, dtype="object")).fillna("").astype(str).str.strip().str.lower()
+    mask = ~status_series.isin(["9. não evoluiu", "9. nao evoluiu"])
+    return base.loc[mask].reset_index(drop=True).copy()
+
+
+def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.DataFrame | None = None, comparative_label: str = "Sem comparativo anterior"):
+    df_metricas = filter_metrics_base(df_filtrado)
+    df_anterior_metricas = filter_metrics_base(df_anterior)
+
+    total_operacoes = len(df_metricas)
+    valor_total = df_metricas["valor_operacao"].sum()
+    valor_ponderado = df_metricas["valor_ponderado"].sum()
+    comissao_mapa_total = df_metricas["comissao_mapa"].sum()
+    comissao_mapa_ponderada = df_metricas["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_metricas.columns else 0
+    ticket_medio = df_metricas["valor_operacao"].mean() if total_operacoes > 0 else 0
+
+    if df_anterior_metricas is None or df_anterior_metricas.empty:
         total_operacoes_ant = total_operacoes
         valor_total_ant = valor_total
         valor_ponderado_ant = valor_ponderado
@@ -1804,12 +1897,12 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
         ticket_medio_ant = ticket_medio
         comparative_label = "Sem comparativo anterior"
     else:
-        total_operacoes_ant = len(df_anterior)
-        valor_total_ant = df_anterior["valor_operacao"].sum()
-        valor_ponderado_ant = df_anterior["valor_ponderado"].sum()
-        comissao_mapa_total_ant = df_anterior["comissao_mapa"].sum()
-        comissao_mapa_ponderada_ant = df_anterior["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_anterior.columns else 0
-        ticket_medio_ant = df_anterior["valor_operacao"].mean() if len(df_anterior) > 0 else 0
+        total_operacoes_ant = len(df_anterior_metricas)
+        valor_total_ant = df_anterior_metricas["valor_operacao"].sum()
+        valor_ponderado_ant = df_anterior_metricas["valor_ponderado"].sum()
+        comissao_mapa_total_ant = df_anterior_metricas["comissao_mapa"].sum()
+        comissao_mapa_ponderada_ant = df_anterior_metricas["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_anterior_metricas.columns else 0
+        ticket_medio_ant = df_anterior_metricas["valor_operacao"].mean() if len(df_anterior_metricas) > 0 else 0
 
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
@@ -1825,7 +1918,7 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
     with m6:
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant), previous_value_label=format_brl_card(ticket_medio_ant), comparative_label=comparative_label), unsafe_allow_html=True)
 
-    render_metric_changes_panel(df_filtrado, df_anterior if df_anterior is not None else pd.DataFrame(), comparative_label)
+    render_metric_changes_panel(df_metricas, df_anterior_metricas if df_anterior_metricas is not None else pd.DataFrame(), comparative_label)
 
 
 def render_empty_state(title: str, message: str):
