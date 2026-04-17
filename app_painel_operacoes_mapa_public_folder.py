@@ -1306,22 +1306,22 @@ def build_base_change_intro(df_atual: pd.DataFrame, df_anterior: pd.DataFrame):
 
     return novos_limpos, removidos_limpos, pares
 
-def render_metric_changes_panel(df_atual: pd.DataFrame, df_anterior: pd.DataFrame, comparative_label: str):
+def render_metric_changes_panel(df_intro_atual: pd.DataFrame, df_intro_anterior: pd.DataFrame, df_metric_atual: pd.DataFrame, df_metric_anterior: pd.DataFrame, comparative_label: str):
     with st.expander("Ver mudanças vs base comparativa", expanded=False):
         st.caption(f"Base comparativa utilizada: {comparative_label}")
 
-        novos, removidos, reclassificados = build_base_change_intro(df_atual, df_anterior)
+        novos, removidos, reclassificados = build_base_change_intro(df_intro_atual, df_intro_anterior)
 
         st.markdown("**Mudanças de escopo da base**")
         if not novos.empty:
             st.markdown("**Novas operações**")
-            st.write("\n".join(format_operation_intro_line(row) for _, row in novos.iterrows()))
+            st.markdown("\n".join(format_operation_intro_line(row) for _, row in novos.iterrows()))
         else:
             st.write("Nenhuma nova operação identificada na base comparativa.")
 
         if not removidos.empty:
             st.markdown("**Operações removidas**")
-            st.write("\n".join(format_operation_intro_line(row) for _, row in removidos.iterrows()))
+            st.markdown("\n".join(format_operation_intro_line(row) for _, row in removidos.iterrows()))
         else:
             st.write("Nenhuma operação removida identificada na base comparativa.")
 
@@ -1333,7 +1333,7 @@ def render_metric_changes_panel(df_atual: pd.DataFrame, df_anterior: pd.DataFram
                     f"- Antes: {row_ant.get('compare_key')} | Valor: {format_brl_card(row_ant.get('valor_operacao', 0))} | Fee MAPA: {format_brl_card(row_ant.get('comissao_mapa', 0))} | Chance: {row_ant.get('chance_fechamento', '-') or '-'}\n"
                     f"  Agora: {row_novo.get('compare_key')} | Valor: {format_brl_card(row_novo.get('valor_operacao', 0))} | Fee MAPA: {format_brl_card(row_novo.get('comissao_mapa', 0))} | Chance: {row_novo.get('chance_fechamento', '-') or '-'}"
                 )
-            st.write("\n".join(linhas))
+            st.markdown("\n".join(linhas))
         else:
             st.write("Nenhuma reclassificação relevante identificada.")
 
@@ -1341,12 +1341,12 @@ def render_metric_changes_panel(df_atual: pd.DataFrame, df_anterior: pd.DataFram
 
         col1, col2 = st.columns(2)
         metric_texts = [
-            ("Nº de Operações", build_metric_reason_text("Nº de Operações", df_atual, df_anterior)),
-            ("Valor Total", build_metric_reason_text("Valor Total", df_atual, df_anterior)),
-            ("Valor Ponderado", build_metric_reason_text("Valor Ponderado", df_atual, df_anterior)),
-            ("Comissão MAPA", build_metric_reason_text("Comissão MAPA", df_atual, df_anterior)),
-            ("Valor Ponderado, Comissão MAPA", build_metric_reason_text("Valor Ponderado, Comissão MAPA", df_atual, df_anterior)),
-            ("Ticket Médio", build_metric_reason_text("Ticket Médio", df_atual, df_anterior)),
+            ("Nº de Operações", build_metric_reason_text("Nº de Operações", df_metric_atual, df_metric_anterior)),
+            ("Valor Total", build_metric_reason_text("Valor Total", df_metric_atual, df_metric_anterior)),
+            ("Valor Ponderado", build_metric_reason_text("Valor Ponderado", df_metric_atual, df_metric_anterior)),
+            ("Comissão MAPA", build_metric_reason_text("Comissão MAPA", df_metric_atual, df_metric_anterior)),
+            ("Valor Ponderado, Comissão MAPA", build_metric_reason_text("Valor Ponderado, Comissão MAPA", df_metric_atual, df_metric_anterior)),
+            ("Ticket Médio", build_metric_reason_text("Ticket Médio", df_metric_atual, df_metric_anterior)),
         ]
 
         for idx, (titulo, texto) in enumerate(metric_texts):
@@ -1918,7 +1918,13 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
     with m6:
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant), previous_value_label=format_brl_card(ticket_medio_ant), comparative_label=comparative_label), unsafe_allow_html=True)
 
-    render_metric_changes_panel(df_metricas, df_anterior_metricas if df_anterior_metricas is not None else pd.DataFrame(), comparative_label)
+    render_metric_changes_panel(
+        df_filtrado if df_filtrado is not None else pd.DataFrame(),
+        df_anterior if df_anterior is not None else pd.DataFrame(),
+        df_metricas,
+        df_anterior_metricas if df_anterior_metricas is not None else pd.DataFrame(),
+        comparative_label,
+    )
 
 
 def render_empty_state(title: str, message: str):
