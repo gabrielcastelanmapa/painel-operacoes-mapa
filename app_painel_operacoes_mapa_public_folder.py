@@ -1306,6 +1306,21 @@ def build_base_change_intro(df_atual: pd.DataFrame, df_anterior: pd.DataFrame):
 
     return novos_limpos, removidos_limpos, pares
 
+
+def build_metric_summary_line(label: str, current_value, previous_value, kind: str = "currency") -> str:
+    delta = (current_value or 0) - (previous_value or 0)
+
+    if kind == "count":
+        before_txt = f"{int(round(previous_value or 0))}"
+        current_txt = f"{int(round(current_value or 0))}"
+    else:
+        before_txt = format_brl_card(previous_value or 0)
+        current_txt = format_brl_card(current_value or 0)
+
+    delta_txt = format_delta_value(delta, "count" if kind == "count" else "currency")
+    return f"Antes {before_txt} | Atual {current_txt} | Variação {delta_txt}"
+
+
 def render_metric_changes_panel(df_intro_atual: pd.DataFrame, df_intro_anterior: pd.DataFrame, df_metric_atual: pd.DataFrame, df_metric_anterior: pd.DataFrame, comparative_label: str):
     with st.expander("Ver mudanças vs base comparativa", expanded=False):
         st.caption(f"Base comparativa utilizada: {comparative_label}")
@@ -1339,20 +1354,34 @@ def render_metric_changes_panel(df_intro_atual: pd.DataFrame, df_intro_anterior:
 
         st.markdown("---")
 
+        total_atual = len(df_metric_atual)
+        total_anterior = len(df_metric_anterior)
+        valor_total_atual = pd.to_numeric(df_metric_atual.get("valor_operacao", 0), errors="coerce").fillna(0).sum()
+        valor_total_anterior = pd.to_numeric(df_metric_anterior.get("valor_operacao", 0), errors="coerce").fillna(0).sum()
+        valor_ponderado_atual = pd.to_numeric(df_metric_atual.get("valor_ponderado", 0), errors="coerce").fillna(0).sum()
+        valor_ponderado_anterior = pd.to_numeric(df_metric_anterior.get("valor_ponderado", 0), errors="coerce").fillna(0).sum()
+        comissao_atual = pd.to_numeric(df_metric_atual.get("comissao_mapa", 0), errors="coerce").fillna(0).sum()
+        comissao_anterior = pd.to_numeric(df_metric_anterior.get("comissao_mapa", 0), errors="coerce").fillna(0).sum()
+        comissao_pond_atual = pd.to_numeric(df_metric_atual.get("comissao_mapa_ponderada", 0), errors="coerce").fillna(0).sum()
+        comissao_pond_anterior = pd.to_numeric(df_metric_anterior.get("comissao_mapa_ponderada", 0), errors="coerce").fillna(0).sum()
+        ticket_atual = pd.to_numeric(df_metric_atual.get("valor_operacao", 0), errors="coerce").fillna(0).mean() if len(df_metric_atual) > 0 else 0
+        ticket_anterior = pd.to_numeric(df_metric_anterior.get("valor_operacao", 0), errors="coerce").fillna(0).mean() if len(df_metric_anterior) > 0 else 0
+
         col1, col2 = st.columns(2)
         metric_texts = [
-            ("Nº de Operações", build_metric_reason_text("Nº de Operações", df_metric_atual, df_metric_anterior)),
-            ("Valor Total", build_metric_reason_text("Valor Total", df_metric_atual, df_metric_anterior)),
-            ("Valor Ponderado", build_metric_reason_text("Valor Ponderado", df_metric_atual, df_metric_anterior)),
-            ("Comissão MAPA", build_metric_reason_text("Comissão MAPA", df_metric_atual, df_metric_anterior)),
-            ("Valor Ponderado, Comissão MAPA", build_metric_reason_text("Valor Ponderado, Comissão MAPA", df_metric_atual, df_metric_anterior)),
-            ("Ticket Médio", build_metric_reason_text("Ticket Médio", df_metric_atual, df_metric_anterior)),
+            ("Nº de Operações", build_metric_summary_line("Nº de Operações", total_atual, total_anterior, kind="count"), build_metric_reason_text("Nº de Operações", df_metric_atual, df_metric_anterior)),
+            ("Valor Total", build_metric_summary_line("Valor Total", valor_total_atual, valor_total_anterior, kind="currency"), build_metric_reason_text("Valor Total", df_metric_atual, df_metric_anterior)),
+            ("Valor Ponderado", build_metric_summary_line("Valor Ponderado", valor_ponderado_atual, valor_ponderado_anterior, kind="currency"), build_metric_reason_text("Valor Ponderado", df_metric_atual, df_metric_anterior)),
+            ("Comissão MAPA", build_metric_summary_line("Comissão MAPA", comissao_atual, comissao_anterior, kind="currency"), build_metric_reason_text("Comissão MAPA", df_metric_atual, df_metric_anterior)),
+            ("Valor Ponderado, Comissão MAPA", build_metric_summary_line("Valor Ponderado, Comissão MAPA", comissao_pond_atual, comissao_pond_anterior, kind="currency"), build_metric_reason_text("Valor Ponderado, Comissão MAPA", df_metric_atual, df_metric_anterior)),
+            ("Ticket Médio", build_metric_summary_line("Ticket Médio", ticket_atual, ticket_anterior, kind="currency"), build_metric_reason_text("Ticket Médio", df_metric_atual, df_metric_anterior)),
         ]
 
-        for idx, (titulo, texto) in enumerate(metric_texts):
+        for idx, (titulo, resumo, texto) in enumerate(metric_texts):
             target_col = col1 if idx % 2 == 0 else col2
             with target_col:
                 st.markdown(f"**{titulo}**")
+                st.caption(resumo)
                 st.write(texto)
 
 
