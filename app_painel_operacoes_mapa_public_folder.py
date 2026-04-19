@@ -2,6 +2,7 @@ import re
 import json
 import base64
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from html import escape
 from difflib import SequenceMatcher
@@ -724,6 +725,79 @@ def infer_sort_key_from_name(path: Path):
     if ref_date is not None and pd.notna(ref_date):
         return (ref_date.strftime("%Y%m%d"), name)
     return ("", name)
+
+
+
+def parse_analyzed_operations_excel_from_bytes(file_bytes: bytes, file_name: str = "upload.xlsx"):
+    tmp_path = Path(tempfile.gettempdir()) / f"analisadas_tmp_{normalize_file_match_text(file_name).replace(' ', '_')}.xlsx"
+    tmp_path.write_bytes(file_bytes)
+    try:
+        return parse_analyzed_operations_excel_from_path(tmp_path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def parse_analyzed_operations_excel_from_path(file_path: Path):
+    workbook = pd.ExcelFile(file_path)
+    target_sheet = "Operação Analisada ou Reprovada"
+    if target_sheet not in workbook.sheet_names:
+        return pd.DataFrame()
+
+    raw = pd.read_excel(file_path, sheet_name=target_sheet, header=5)
+
+    rename_map = {
+        "Operação": "operacao",
+        "Tipo": "tipo",
+        "Responsável": "responsavel",
+        "Resumo": "resumo",
+        "Avaliação": "avaliacao",
+        "LINK Para Acesso ao Relatório Interno de Comitê": "link_relatorio",
+        "Prioridade": "prioridade",
+        "Fase": "fase",
+        "Status": "status",
+        "Valor da Operação": "valor_operacao",
+        "Ganho Mapa": "ganho_mapa",
+        "Quem Trouxe": "quem_trouxe",
+        "Data do Recebimento": "data_recebimento",
+        "Data da Reprovação / Aprovação": "data_decisao",
+        "Chance de Fechamento": "chance_fechamento",
+        "Motivo da Reprovação": "motivo_reprovacao",
+    }
+    df = raw.rename(columns=rename_map).copy()
+
+    expected_cols = list(rename_map.values())
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+    df = df[expected_cols].copy()
+
+    text_cols = [
+        "operacao", "tipo", "responsavel", "resumo", "avaliacao", "link_relatorio",
+        "prioridade", "fase", "status", "quem_trouxe", "chance_fechamento", "motivo_reprovacao"
+    ]
+    for col in text_cols:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    for col in ["valor_operacao", "ganho_mapa"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in ["data_recebimento", "data_decisao"]:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    df = df[df["operacao"].astype(str).str.strip() != ""].copy()
+
+    df["analisada_flag"] = (
+        df["data_decisao"].notna()
+        | df["status"].str.contains(r"declinad|reprovad|aprovad|aprova", case=False, na=False)
+    )
+    df["declinada_flag"] = df["status"].str.contains(r"declinad|reprovad", case=False, na=False)
+    df["tempo_devolucao_dias"] = (df["data_decisao"] - df["data_recebimento"]).dt.days
+
+    return df.reset_index(drop=True)
+
 
 
 def find_previous_file_by_name(files, current_file):
@@ -3100,7 +3174,7 @@ def render_sidebar_menu():
             st.markdown("#### Subsessões")
             subsessao = st.radio(
                 "Operações",
-                options=["Top Five", "Secundárias", "Consolidado"],
+                options=["Top Five", "Secundárias", "Consolidado", "Analisadas e Declinadas"],
                 index=0,
                 key="sidebar_subsessao_operacoes",
             )
@@ -3208,8 +3282,10 @@ def render_operations_section(visao_painel: str):
     try:
         if arquivo_escolhido is not None:
             df = parse_pipeline_excel_from_path(arquivo_escolhido)
+            df_analisadas = parse_analyzed_operations_excel_from_path(arquivo_escolhido)
         else:
             df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
+            df_analisadas = parse_analyzed_operations_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
     except Exception as e:
         st.error(f"Erro ao ler a planilha: {e}")
         return
@@ -3244,7 +3320,7 @@ def render_operations_section(visao_painel: str):
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Operações</h3>
-                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias e Consolidado.</p>
+                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias, Consolidado e Operações Analisadas e Declinadas.</p>
             </div>
         </div>
         """,
@@ -3281,6 +3357,280 @@ def render_operations_section(visao_painel: str):
             filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
             page_mode="secundarias",
         )
+
+
+
+def render_analyzed_operations_filter_block(df_base: pd.DataFrame, key_prefix: str = "analisadas"):
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-head"><h3 class="section-title">Filtros | Operações Analisadas e Declinadas</h3><p class="section-note">Os filtros abaixo impactam métricas, gráficos e tabela da aba de operações analisadas/reprovadas.</p></div>', unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        responsavel_sel = st.multiselect("Responsável", options=make_options(df_base["responsavel"]), key=f"{key_prefix}_responsavel")
+    with c2:
+        tipo_sel = st.multiselect("Tipo", options=make_options(df_base["tipo"]), key=f"{key_prefix}_tipo")
+    with c3:
+        prioridade_sel = st.multiselect("Prioridade", options=order_categories(df_base["prioridade"].tolist()), key=f"{key_prefix}_prioridade")
+    with c4:
+        fase_sel = st.multiselect("Fase", options=order_categories(df_base["fase"].tolist()), key=f"{key_prefix}_fase")
+
+    c5, c6 = st.columns(2)
+    with c5:
+        status_sel = st.multiselect("Status", options=order_categories(df_base["status"].tolist()), key=f"{key_prefix}_status")
+    with c6:
+        origem_sel = st.multiselect("Quem trouxe", options=make_options(df_base["quem_trouxe"]), key=f"{key_prefix}_origem")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    mask = pd.Series(True, index=df_base.index)
+    mask &= apply_multiselect_filter(df_base["responsavel"], responsavel_sel)
+    mask &= apply_multiselect_filter(df_base["tipo"], tipo_sel)
+    mask &= apply_multiselect_filter(df_base["prioridade"], prioridade_sel)
+    mask &= apply_multiselect_filter(df_base["fase"], fase_sel)
+    mask &= apply_multiselect_filter(df_base["status"], status_sel)
+    mask &= apply_multiselect_filter(df_base["quem_trouxe"], origem_sel)
+
+    return df_base.loc[mask].reset_index(drop=True).copy()
+
+
+def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
+    recebidas = len(df_filtrado)
+    analisadas = int(df_filtrado["analisada_flag"].fillna(False).sum()) if "analisada_flag" in df_filtrado.columns else 0
+    declinadas = int(df_filtrado["declinada_flag"].fillna(False).sum()) if "declinada_flag" in df_filtrado.columns else 0
+    tempo_medio = pd.to_numeric(df_filtrado["tempo_devolucao_dias"], errors="coerce").dropna()
+    tempo_medio_val = tempo_medio.mean() if not tempo_medio.empty else 0
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown(metric_card("Recebidas", f"{int(recebidas)}", "Quantidade de operações recebidas"), unsafe_allow_html=True)
+    with m2:
+        st.markdown(metric_card("Analisadas", f"{int(analisadas)}", "Operações com decisão / retorno"), unsafe_allow_html=True)
+    with m3:
+        st.markdown(metric_card("Declinadas / Reprovadas", f"{int(declinadas)}", "Status de declínio ou reprovação"), unsafe_allow_html=True)
+    with m4:
+        st.markdown(metric_card("Tempo Médio de Devolução", f"{round(float(tempo_medio_val), 1)} dias" if tempo_medio_val == tempo_medio_val else "—", "Média entre recebimento e decisão"), unsafe_allow_html=True)
+
+
+def render_analyzed_operations_charts(df_filtrado: pd.DataFrame):
+    if df_filtrado.empty:
+        render_empty_state("Operações Analisadas e Declinadas", "Nenhuma operação encontrada para os filtros atuais.")
+        return
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        base_status = df_filtrado.groupby("status", dropna=False).size().reset_index(name="quantidade")
+        base_status["status"] = base_status["status"].apply(normalize_category_text)
+        status_order = order_categories(base_status["status"].tolist())
+        base_status["status"] = pd.Categorical(base_status["status"], categories=status_order, ordered=True)
+        base_status = base_status.sort_values("status")
+        fig_status = px.bar(base_status, x="status", y="quantidade", title="Quantidade por status", text_auto=True, color_discrete_sequence=[MAPA_TEAL], category_orders={"status": status_order})
+        fig_status.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_status, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c2:
+        base_resp = df_filtrado.groupby("responsavel", dropna=False).size().reset_index(name="quantidade").sort_values("quantidade", ascending=False)
+        fig_resp = px.bar(base_resp, x="responsavel", y="quantidade", title="Quantidade por responsável", text_auto=True, color_discrete_sequence=[MAPA_NAVY_2])
+        fig_resp.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Quantidade", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_resp, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    base_tempo = (
+        df_filtrado.dropna(subset=["tempo_devolucao_dias"])
+        .groupby("responsavel", dropna=False)["tempo_devolucao_dias"]
+        .mean()
+        .reset_index()
+        .sort_values("tempo_devolucao_dias", ascending=False)
+    )
+    if not base_tempo.empty:
+        fig_tempo = px.bar(base_tempo, x="responsavel", y="tempo_devolucao_dias", title="Tempo médio de devolução por responsável", text_auto=".1f", color_discrete_sequence=[MAPA_DARK_TEAL])
+        fig_tempo.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Dias", margin=dict(l=10, r=10, t=50, b=10))
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.plotly_chart(fig_tempo, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+def make_analyzed_inline_card_table(df_exibicao: pd.DataFrame) -> str:
+    headers = [
+        ("operacao", "Operação", "text"),
+        ("tipo", "Tipo", "text"),
+        ("responsavel", "Responsável", "text"),
+        ("prioridade", "Prioridade", "text"),
+        ("fase", "Fase", "text"),
+        ("status", "Status", "text"),
+        ("quem_trouxe", "Quem Trouxe", "text"),
+        ("data_recebimento", "Recebimento", "text"),
+        ("data_decisao", "Decisão", "text"),
+        ("tempo_devolucao_dias", "Tempo (dias)", "number"),
+        ("valor_operacao", "Valor da Operação", "number"),
+    ]
+
+    parts = []
+    parts.append(
+        f"""
+        <style>
+            body {{ margin: 0; background: #ffffff; }}
+            .an-wrap {{ font-family: "Montserrat", "Segoe UI", Arial, sans-serif; color: {TEXT_DARK}; }}
+            .an-table {{ width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; border: 1px solid {MAPA_BORDER}; border-radius: 18px; overflow: hidden; }}
+            .an-table thead th {{
+                background: linear-gradient(90deg, {MAPA_NAVY}, {MAPA_TEAL});
+                color: white; font-size: 12px; padding: 12px 10px; text-align: left;
+                border-right: 1px solid rgba(255,255,255,0.10); user-select: none; position: sticky; top: 0; z-index: 5;
+            }}
+            .an-table thead th:last-child {{ border-right: 0; }}
+            .an-table tbody td {{
+                border-right: 1px solid #d6e4ea; border-bottom: 1px solid #d6e4ea;
+                padding: 11px 10px; font-size: 12px; vertical-align: middle; word-wrap: break-word; background: #ffffff;
+            }}
+            .an-table tbody td:last-child {{ border-right: 0; }}
+            .an-row {{ cursor: pointer; transition: background 0.15s ease; }}
+            .an-row:hover td {{ background: #f1f8fa; }}
+            .detail-row {{ display: none; }}
+            .detail-row.open {{ display: table-row; }}
+            .detail-cell {{ padding: 0 !important; background: #ffffff !important; border-right: 0 !important; }}
+            .detail-box {{ background: #ffffff; }}
+            .detail-section {{ padding: 11px 16px; font-size: 12px; line-height: 1.5; background: {MAPA_LIGHT_2}; border-bottom: 1px solid {MAPA_BORDER}; color: {TEXT_DARK}; }}
+            .detail-title {{ font-style: italic; font-weight: 700; margin-bottom: 4px; color: {MAPA_NAVY}; }}
+            .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+            .muted {{ color: #5f6872; font-size: 12px; margin: 0 0 10px 0; }}
+            .pill {{ display: inline-block; padding: 3px 9px; border-radius: 999px; background: rgba(4,16,78,0.08); color: {MAPA_NAVY}; font-weight: 700; font-size: 11px; }}
+        </style>
+        <div class="an-wrap">
+            <p class="muted">Clique em qualquer célula da linha para abrir ou fechar os detalhes da análise.</p>
+            <table class="an-table">
+                <thead><tr>
+        """
+    )
+
+    for key, label, kind in headers:
+        cls = ' class="num"' if kind == "number" else ""
+        parts.append(f"<th{cls}>{escape(label)}</th>")
+    parts.append("</tr></thead><tbody>")
+
+    for idx, row in df_exibicao.reset_index(drop=True).iterrows():
+        detail_id = f"an-detail-{idx}"
+
+        parts.append(f'<tr class="an-row" onclick="toggleDetail(\'{detail_id}\')">')
+        for key, label, kind in headers:
+            raw = row.get(key)
+            value = "—"
+            if key in ("valor_operacao",):
+                value = format_brl(raw) if pd.notna(raw) and raw != "" else "—"
+            elif key in ("data_recebimento", "data_decisao"):
+                value = format_date_br(raw)
+            elif key == "tempo_devolucao_dias":
+                value = format_int_br(raw)
+            else:
+                if raw not in [None, ""]:
+                    value = str(raw)
+            cls = ' class="num"' if kind == "number" else ""
+            parts.append(f"<td{cls}>{escape(value)}</td>")
+        parts.append("</tr>")
+
+        resumo = nl2br(row.get("resumo"))
+        avaliacao = nl2br(row.get("avaliacao"))
+        motivo = nl2br(row.get("motivo_reprovacao"))
+        link_rel = nl2br(row.get("link_relatorio"))
+
+        parts.append(
+            f"""
+            <tr id="{detail_id}" class="detail-row">
+                <td class="detail-cell" colspan="{len(headers)}">
+                    <div class="detail-box">
+                        <div class="detail-section">
+                            <div class="detail-title">Resumo da Operação:</div>
+                            <div>{resumo}</div>
+                        </div>
+                        <div class="detail-section">
+                            <div class="detail-title">Análise:</div>
+                            <div>{avaliacao}</div>
+                        </div>
+                        <div class="detail-section">
+                            <div class="detail-title">Motivo do Declínio / Reprovação:</div>
+                            <div>{motivo}</div>
+                        </div>
+                        <div class="detail-section">
+                            <div class="detail-title">Link para Relatório Interno:</div>
+                            <div>{link_rel}</div>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+            """
+        )
+
+    parts.append(
+        """
+                </tbody>
+            </table>
+        </div>
+        <script>
+            function toggleDetail(id) {
+                const row = document.getElementById(id);
+                if (row) {
+                    row.classList.toggle('open');
+                }
+            }
+        </script>
+        """
+    )
+    return "".join(parts)
+
+
+def render_analyzed_operations_table(df_filtrado: pd.DataFrame):
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Operações Analisadas e Declinadas | Base detalhada</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Tabela detalhada com card expansível para resumo, análise e motivo do declínio/reprovação.</p>', unsafe_allow_html=True)
+
+    if df_filtrado.empty:
+        st.info("Nenhuma operação encontrada para os filtros atuais.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+
+    csv = df_filtrado.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="Baixar CSV | Operações Analisadas e Declinadas",
+        data=csv,
+        file_name="operacoes_analisadas_declinadas.csv",
+        mime="text/csv",
+        key="download_analisadas_csv",
+    )
+
+    display_df = df_filtrado.copy()
+    html_table = make_analyzed_inline_card_table(display_df)
+    components.html(html_table, height=980, scrolling=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_analyzed_operations_section(df_base: pd.DataFrame):
+    st.markdown(
+        """
+        <div class="section-card">
+            <div class="section-head">
+                <h3 class="section-title">Operações Analisadas e Declinadas</h3>
+                <p class="section-note">Visão executiva da aba específica da planilha com operações recebidas, analisadas e declinadas, incluindo tempo médio de devolução e detalhamento de análise.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if df_base is None or df_base.empty:
+        st.warning("A aba 'Operação Analisada ou Reprovada' não foi encontrada ou não possui registros válidos.")
+        return
+
+    df_filtrado = render_analyzed_operations_filter_block(df_base, key_prefix="analisadas_declinadas")
+    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da aba de operações analisadas / reprovadas.")
+    render_analyzed_operations_metric_cards(df_filtrado)
+    render_analyzed_operations_charts(df_filtrado)
+    render_analyzed_operations_table(df_filtrado)
+
 
 
 def render_document_control_section():
