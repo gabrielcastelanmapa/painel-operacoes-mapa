@@ -3311,10 +3311,6 @@ def render_operations_section(visao_painel: str):
         unsafe_allow_html=True,
     )
 
-    if df.empty:
-        st.warning("Nenhum registro válido foi encontrado na aba 'Pipeline'.")
-        return
-
     st.markdown(
         """
         <div class="section-card">
@@ -3327,36 +3323,53 @@ def render_operations_section(visao_painel: str):
         unsafe_allow_html=True,
     )
 
-    if visao_painel == "Consolidado":
-        render_dashboard_page(
-            df_page_base=df.copy(),
-            df_page_base_anterior=df_anterior.copy(),
-            comparative_label=arquivo_anterior_label,
-            key_prefix="consolidado",
-            escopo="consolidado",
-            filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
-            page_mode="consolidado",
-        )
-    elif visao_painel == "Top Five":
-        render_dashboard_page(
-            df_page_base=df[is_top_five(df["top_five"])].copy(),
-            df_page_base_anterior=df_anterior[is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
-            comparative_label=arquivo_anterior_label,
-            key_prefix="top_five",
-            escopo="Top Five",
-            filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
-            page_mode="top_five",
-        )
+    if visao_painel == "Analisadas e Declinadas":
+        render_analyzed_operations_section(df_analisadas.copy())
     else:
-        render_dashboard_page(
-            df_page_base=df[~is_top_five(df["top_five"])].copy(),
-            df_page_base_anterior=df_anterior[~is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
-            comparative_label=arquivo_anterior_label,
-            key_prefix="secundarias",
-            escopo="Secundárias",
-            filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
-            page_mode="secundarias",
-        )
+        if df.empty:
+            st.warning("Nenhum registro válido foi encontrado na aba 'Pipeline'.")
+            return
+
+        if visao_painel == "Consolidado":
+            render_dashboard_page(
+                df_page_base=df.copy(),
+                df_page_base_anterior=df_anterior.copy(),
+                comparative_label=arquivo_anterior_label,
+                key_prefix="consolidado",
+                escopo="consolidado",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
+                page_mode="consolidado",
+            )
+        elif visao_painel == "Top Five":
+            render_dashboard_page(
+                df_page_base=df[is_top_five(df["top_five"])].copy(),
+                df_page_base_anterior=df_anterior[is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
+                comparative_label=arquivo_anterior_label,
+                key_prefix="top_five",
+                escopo="Top Five",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
+                page_mode="top_five",
+            )
+        elif visao_painel == "Secundárias":
+            render_dashboard_page(
+                df_page_base=df[~is_top_five(df["top_five"])].copy(),
+                df_page_base_anterior=df_anterior[~is_top_five(df_anterior["top_five"])].copy() if not df_anterior.empty else pd.DataFrame(),
+                comparative_label=arquivo_anterior_label,
+                key_prefix="secundarias",
+                escopo="Secundárias",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Secundárias.",
+                page_mode="secundarias",
+            )
+        else:
+            render_dashboard_page(
+                df_page_base=df.copy(),
+                df_page_base_anterior=df_anterior.copy(),
+                comparative_label=arquivo_anterior_label,
+                key_prefix="consolidado_fallback",
+                escopo="consolidado",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
+                page_mode="consolidado",
+            )
 
 
 
