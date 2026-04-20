@@ -9,6 +9,8 @@ from difflib import SequenceMatcher
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import streamlit.components.v1 as components
 from openpyxl import load_workbook
@@ -785,16 +787,30 @@ def parse_analyzed_operations_excel_from_path(file_path: Path):
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     for col in ["data_recebimento", "data_decisao"]:
-        df[col] = pd.to_datetime(df[col], errors="coerce")
+        df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
 
     df = df[df["operacao"].astype(str).str.strip() != ""].copy()
 
     df["analisada_flag"] = (
         df["data_decisao"].notna()
-        | df["status"].str.contains(r"declinad|reprovad|aprovad|aprova", case=False, na=False)
+        | df["status"].str.contains(r"declinad|reprovad|aprovad|aprova|não segui", case=False, na=False)
     )
-    df["declinada_flag"] = df["status"].str.contains(r"declinad|reprovad", case=False, na=False)
-    df["tempo_devolucao_dias"] = (df["data_decisao"] - df["data_recebimento"]).dt.days
+    df["declinada_flag"] = df["status"].str.contains(r"declinad|reprovad|não segui", case=False, na=False)
+    df["em_evolucao_flag"] = ~df["analisada_flag"]
+
+    df["data_inconsistente_flag"] = (
+        df["data_recebimento"].notna()
+        & df["data_decisao"].notna()
+        & (df["data_decisao"] < df["data_recebimento"])
+    )
+    df["tempo_devolucao_dias"] = np.where(
+        df["data_inconsistente_flag"],
+        np.nan,
+        (df["data_decisao"] - df["data_recebimento"]).dt.days,
+    )
+
+    df["semana_recebimento"] = df["data_recebimento"].dt.to_period("W-SUN").dt.start_time
+    df["semana_recebimento_label"] = df["semana_recebimento"].dt.strftime("%d/%m/%Y")
 
     return df.reset_index(drop=True)
 
@@ -3411,7 +3427,8 @@ def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
     analisadas = int(df_filtrado["analisada_flag"].fillna(False).sum()) if "analisada_flag" in df_filtrado.columns else 0
     declinadas = int(df_filtrado["declinada_flag"].fillna(False).sum()) if "declinada_flag" in df_filtrado.columns else 0
     tempo_medio = pd.to_numeric(df_filtrado["tempo_devolucao_dias"], errors="coerce").dropna()
-    tempo_medio_val = tempo_medio.mean() if not tempo_medio.empty else 0
+    tempo_medio = tempo_medio[tempo_medio >= 0]
+    tempo_medio_val = tempo_medio.mean() if not tempo_medio.empty else np.nan
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
@@ -3421,7 +3438,102 @@ def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
     with m3:
         st.markdown(metric_card("Declinadas / Reprovadas", f"{int(declinadas)}", "Status de declínio ou reprovação"), unsafe_allow_html=True)
     with m4:
-        st.markdown(metric_card("Tempo Médio de Devolução", f"{round(float(tempo_medio_val), 1)} dias" if tempo_medio_val == tempo_medio_val else "—", "Média entre recebimento e decisão"), unsafe_allow_html=True)
+        st.markdown(metric_card("Tempo Médio de Devolução", f"{round(float(tempo_medio_val), 1)} dias" if pd.notna(tempo_medio_val) else "—", "Média válida entre recebimento e decisão"), unsafe_allow_html=True)
+
+
+
+def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
+    base = df_filtrado.dropna(subset=["semana_recebimento"]).copy()
+    if base.empty:
+        return
+
+    recebidas_semana_tipo = (
+        base.groupby(["semana_recebimento", "semana_recebimento_label", "tipo"], dropna=False)
+        .size()
+        .reset_index(name="quantidade")
+        .sort_values(["semana_recebimento", "tipo"])
+    )
+
+    linha_semana = (
+        base.groupby(["semana_recebimento", "semana_recebimento_label"], dropna=False)
+        .agg(
+            recebidas=("operacao", "count"),
+            devolvidas_pct=("analisada_flag", lambda s: float(pd.Series(s).fillna(False).mean() * 100)),
+            em_evolucao_pct=("em_evolucao_flag", lambda s: float(pd.Series(s).fillna(False).mean() * 100)),
+        )
+        .reset_index()
+        .sort_values("semana_recebimento")
+    )
+
+    tipo_order = make_options(recebidas_semana_tipo["tipo"])
+    color_sequence = build_operation_color_sequence(tipo_order)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    for idx, tipo in enumerate(tipo_order):
+        subset = recebidas_semana_tipo[recebidas_semana_tipo["tipo"] == tipo]
+        fig.add_trace(
+            go.Bar(
+                x=subset["semana_recebimento_label"],
+                y=subset["quantidade"],
+                name=tipo,
+                marker_color=color_sequence[idx % len(color_sequence)],
+                hovertemplate="Semana: %{x}<br>Tipo: " + str(tipo) + "<br>Recebidas: %{y}<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=linha_semana["semana_recebimento_label"],
+            y=linha_semana["devolvidas_pct"],
+            name="% Devolvidas",
+            mode="lines+markers+text",
+            text=[f"{v:.0f}%" for v in linha_semana["devolvidas_pct"]],
+            textposition="top center",
+            line=dict(color=MAPA_NAVY, width=3),
+            marker=dict(size=8, color=MAPA_NAVY),
+            hovertemplate="Semana: %{x}<br>% Devolvidas: %{y:.1f}%<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=linha_semana["semana_recebimento_label"],
+            y=linha_semana["em_evolucao_pct"],
+            name="% Em evolução",
+            mode="lines+markers+text",
+            text=[f"{v:.0f}%" for v in linha_semana["em_evolucao_pct"]],
+            textposition="bottom center",
+            line=dict(color=MAPA_DARK_TEAL, width=3, dash="dash"),
+            marker=dict(size=8, color=MAPA_DARK_TEAL),
+            hovertemplate="Semana: %{x}<br>% Em evolução: %{y:.1f}%<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        barmode="stack",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Montserrat, Arial", color=TEXT_DARK),
+        title=dict(
+            text="Operações recebidas por semana | acumulado por tipo + % devolvidas / em evolução",
+            font=dict(size=18, color=MAPA_NAVY),
+        ),
+        xaxis_title="Semana de recebimento",
+        yaxis_title="Nº de operações recebidas",
+        legend_title_text="Tipo / Indicador",
+        margin=dict(l=10, r=10, t=70, b=10),
+        hovermode="x unified",
+        height=480,
+    )
+    fig.update_xaxes(type="category")
+    fig.update_yaxes(title_text="Nº de operações recebidas", secondary_y=False)
+    fig.update_yaxes(title_text="% da semana", range=[0, 100], ticksuffix="%", secondary_y=True)
+
+    st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def render_analyzed_operations_charts(df_filtrado: pd.DataFrame):
@@ -3430,6 +3542,8 @@ def render_analyzed_operations_charts(df_filtrado: pd.DataFrame):
         return
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    render_analyzed_operations_weekly_chart(df_filtrado)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -3454,6 +3568,7 @@ def render_analyzed_operations_charts(df_filtrado: pd.DataFrame):
 
     base_tempo = (
         df_filtrado.dropna(subset=["tempo_devolucao_dias"])
+        .loc[lambda x: pd.to_numeric(x["tempo_devolucao_dias"], errors="coerce") >= 0]
         .groupby("responsavel", dropna=False)["tempo_devolucao_dias"]
         .mean()
         .reset_index()
@@ -3627,7 +3742,7 @@ def render_analyzed_operations_section(df_base: pd.DataFrame):
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Operações Analisadas e Declinadas</h3>
-                <p class="section-note">Visão executiva da aba específica da planilha com operações recebidas, analisadas e declinadas, incluindo tempo médio de devolução e detalhamento de análise.</p>
+                <p class="section-note">Visão executiva da aba específica da planilha com operações recebidas, analisadas e declinadas, incluindo tempo médio de devolução e detalhamento de análise. Nesta seção, não há comparativo com a base anterior.</p>
             </div>
         </div>
         """,
@@ -3639,7 +3754,20 @@ def render_analyzed_operations_section(df_base: pd.DataFrame):
         return
 
     df_filtrado = render_analyzed_operations_filter_block(df_base, key_prefix="analisadas_declinadas")
-    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da aba de operações analisadas / reprovadas.")
+    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da aba de operações analisadas / reprovadas, sem comparativo com a base anterior.")
+
+    inconsistentes = df_filtrado[df_filtrado.get("data_inconsistente_flag", False)].copy()
+    if not inconsistentes.empty:
+        exemplos = []
+        for _, row in inconsistentes.head(3).iterrows():
+            exemplos.append(
+                f"{row.get('operacao', 'Operação sem nome')}: recebimento {format_date_br(row.get('data_recebimento'))} | decisão {format_date_br(row.get('data_decisao'))}"
+            )
+        st.warning(
+            "Há operação(ões) com data de decisão anterior à data de recebimento. Essas linhas foram desconsideradas no cálculo do tempo médio de devolução. Ex.: "
+            + " ; ".join(exemplos)
+        )
+
     render_analyzed_operations_metric_cards(df_filtrado)
     render_analyzed_operations_charts(df_filtrado)
     render_analyzed_operations_table(df_filtrado)
