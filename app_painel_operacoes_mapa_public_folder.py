@@ -3886,21 +3886,26 @@ def make_analyzed_inline_card_table(df_exibicao: pd.DataFrame) -> str:
 def render_analyzed_operations_open_pipeline_table(df_filtrado: pd.DataFrame):
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<h3 class="subheader-inline">Operações em Andamento | Fases 0 a 4 + 10. Jurídico</h3>', unsafe_allow_html=True)
-    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Listagem exclusiva das operações que permanecem em andamento, com o mesmo modelo expansível da base detalhada.</p>', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Operações Em Estudo</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Listagem exclusiva das operações ainda em estudo, com o mesmo modelo expansível da base detalhada.</p>', unsafe_allow_html=True)
 
-    fases_abertas_regex = r"^(0|1|2|3|4|10)\."
-    df_abertas = df_filtrado[
-        df_filtrado["fase"].fillna("").astype(str).str.strip().str.contains(fases_abertas_regex, regex=True)
-    ].copy()
+    fase_regex = r"^(0|1|2|3|4|10)\."
+    status_aberto_regex = r"nda|aguardando|apresentação|jurídico|em execução|pré-análise|proposta"
+
+    fase_aberta = df_filtrado["fase"].fillna("").astype(str).str.strip().str.contains(fase_regex, regex=True)
+    status_aberto = df_filtrado["status"].fillna("").astype(str).str.strip().str.contains(status_aberto_regex, case=False, regex=True)
+    sem_decisao = pd.to_datetime(df_filtrado["data_decisao"], errors="coerce").isna()
+    nao_fechada = ~df_filtrado["declinada_flag"].fillna(False) & ~df_filtrado["perdida_flag"].fillna(False)
+
+    df_abertas = df_filtrado[(fase_aberta | status_aberto | (sem_decisao & nao_fechada))].copy()
 
     if df_abertas.empty:
-        st.info("Nenhuma operação encontrada nas fases 0 a 4 ou 10. Jurídico para os filtros atuais.")
+        st.info("Nenhuma operação em estudo encontrada para os filtros atuais.")
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
     html_table = make_analyzed_inline_card_table(df_abertas)
-    components.html(html_table, height=780, scrolling=True)
+    components.html(html_table, height=860, scrolling=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
