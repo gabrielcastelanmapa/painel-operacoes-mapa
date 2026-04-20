@@ -3828,6 +3828,10 @@ def make_analyzed_inline_card_table(df_exibicao: pd.DataFrame) -> str:
         avaliacao = nl2br(row.get("avaliacao"))
         motivo = nl2br(row.get("motivo_reprovacao"))
         link_rel = nl2br(row.get("link_relatorio"))
+        originador = nl2br(row.get("quem_trouxe"))
+        chance = nl2br(row.get("chance_fechamento"))
+        fase = nl2br(row.get("fase"))
+        status = nl2br(row.get("status"))
 
         parts.append(
             f"""
@@ -3841,6 +3845,10 @@ def make_analyzed_inline_card_table(df_exibicao: pd.DataFrame) -> str:
                         <div class="detail-section">
                             <div class="detail-title">Análise:</div>
                             <div>{avaliacao}</div>
+                        </div>
+                        <div class="detail-section">
+                            <div class="detail-title">Originador / Chance / Status:</div>
+                            <div><strong>Originador:</strong> {originador}<br><strong>Chance de Fechamento:</strong> {chance}<br><strong>Fase:</strong> {fase}<br><strong>Status:</strong> {status}</div>
                         </div>
                         <div class="detail-section">
                             <div class="detail-title">Motivo do Declínio / Reprovação:</div>
@@ -3872,6 +3880,30 @@ def make_analyzed_inline_card_table(df_exibicao: pd.DataFrame) -> str:
         """
     )
     return "".join(parts)
+
+
+
+def render_analyzed_operations_open_pipeline_table(df_filtrado: pd.DataFrame):
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Operações em Andamento | Fases 0 a 4 + 10. Jurídico</h3>', unsafe_allow_html=True)
+    st.markdown('<p class="section-note" style="margin-bottom: 10px;">Listagem exclusiva das operações que permanecem em andamento, com o mesmo modelo expansível da base detalhada.</p>', unsafe_allow_html=True)
+
+    fases_abertas_regex = r"^(0|1|2|3|4|10)\."
+    df_abertas = df_filtrado[
+        df_filtrado["fase"].fillna("").astype(str).str.strip().str.contains(fases_abertas_regex, regex=True)
+    ].copy()
+
+    if df_abertas.empty:
+        st.info("Nenhuma operação encontrada nas fases 0 a 4 ou 10. Jurídico para os filtros atuais.")
+        st.markdown('</div>', unsafe_allow_html=True)
+        return
+
+    html_table = make_analyzed_inline_card_table(df_abertas)
+    components.html(html_table, height=780, scrolling=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 def render_analyzed_operations_table(df_filtrado: pd.DataFrame):
@@ -3935,6 +3967,7 @@ def render_analyzed_operations_section(df_base: pd.DataFrame):
 
     render_analyzed_operations_metric_cards(df_filtrado)
     render_analyzed_operations_charts(df_filtrado)
+    render_analyzed_operations_open_pipeline_table(df_filtrado)
     render_analyzed_operations_table(df_filtrado)
 
 
