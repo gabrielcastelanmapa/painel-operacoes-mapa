@@ -3465,8 +3465,8 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
         base.groupby(["semana_recebimento", "semana_recebimento_label"], dropna=False)
         .agg(
             recebidas=("operacao", "count"),
-            devolvidas_pct=("analisada_flag", lambda s: float(pd.Series(s).fillna(False).mean() * 100)),
-            em_evolucao_pct=("em_evolucao_flag", lambda s: float(pd.Series(s).fillna(False).mean() * 100)),
+            devolvidas_qtd=("analisada_flag", lambda s: int(pd.Series(s).fillna(False).sum())),
+            em_evolucao_qtd=("em_evolucao_flag", lambda s: int(pd.Series(s).fillna(False).sum())),
         )
         .reset_index()
         .sort_values("semana_recebimento")
@@ -3492,30 +3492,37 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
     fig.add_trace(
         go.Scatter(
             x=linha_semana["semana_recebimento_label"],
-            y=linha_semana["devolvidas_pct"],
-            name="% Devolvidas",
+            y=linha_semana["devolvidas_qtd"],
+            name="Qtd. devolvidas",
             mode="lines+markers+text",
-            text=[f"{v:.0f}%" for v in linha_semana["devolvidas_pct"]],
+            text=[f"{int(v)}" for v in linha_semana["devolvidas_qtd"]],
             textposition="top center",
             line=dict(color=MAPA_NAVY, width=3),
             marker=dict(size=8, color=MAPA_NAVY),
-            hovertemplate="Semana: %{x}<br>% Devolvidas: %{y:.1f}%<extra></extra>",
+            hovertemplate="Semana: %{x}<br>Qtd. devolvidas: %{y}<extra></extra>",
         ),
         secondary_y=True,
     )
     fig.add_trace(
         go.Scatter(
             x=linha_semana["semana_recebimento_label"],
-            y=linha_semana["em_evolucao_pct"],
-            name="% Em evolução",
+            y=linha_semana["em_evolucao_qtd"],
+            name="Qtd. em evolução",
             mode="lines+markers+text",
-            text=[f"{v:.0f}%" for v in linha_semana["em_evolucao_pct"]],
+            text=[f"{int(v)}" for v in linha_semana["em_evolucao_qtd"]],
             textposition="bottom center",
             line=dict(color=MAPA_DARK_TEAL, width=3, dash="dash"),
             marker=dict(size=8, color=MAPA_DARK_TEAL),
-            hovertemplate="Semana: %{x}<br>% Em evolução: %{y:.1f}%<extra></extra>",
+            hovertemplate="Semana: %{x}<br>Qtd. em evolução: %{y}<extra></extra>",
         ),
         secondary_y=True,
+    )
+
+    max_y = max(
+        [0]
+        + recebidas_semana_tipo["quantidade"].fillna(0).tolist()
+        + linha_semana["devolvidas_qtd"].fillna(0).tolist()
+        + linha_semana["em_evolucao_qtd"].fillna(0).tolist()
     )
 
     fig.update_layout(
@@ -3524,7 +3531,7 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Montserrat, Arial", color=TEXT_DARK),
         title=dict(
-            text="Operações recebidas por semana | acumulado por tipo + % devolvidas / em evolução",
+            text="Operações recebidas por semana | acumulado por tipo + qtd. devolvidas / em evolução",
             font=dict(size=18, color=MAPA_NAVY),
         ),
         xaxis_title="Semana de recebimento",
@@ -3536,7 +3543,7 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
     )
     fig.update_xaxes(type="category")
     fig.update_yaxes(title_text="Nº de operações recebidas", secondary_y=False)
-    fig.update_yaxes(title_text="% da semana", range=[0, 100], ticksuffix="%", secondary_y=True)
+    fig.update_yaxes(title_text="Qtd. de operações", range=[0, max_y * 1.15 if max_y > 0 else 1], secondary_y=True)
 
     st.markdown('<div class="chart-box">', unsafe_allow_html=True)
     st.plotly_chart(fig, use_container_width=True)
