@@ -792,12 +792,23 @@ def parse_analyzed_operations_excel_from_path(file_path: Path):
         "Data da Reprovação / Aprovação": "data_decisao",
         "Chance de Fechamento": "chance_fechamento",
         "Motivo da Reprovação": "motivo_reprovacao",
-        "Justificativa": "motivo_reprovacao",
+        "Justificativa": "justificativa_tmp",
         "Semana": "semana_base",
     }
     df = raw.rename(columns=rename_map).copy()
 
-    expected_cols = list(rename_map.values())
+    if "motivo_reprovacao" not in df.columns:
+        df["motivo_reprovacao"] = pd.NA
+    if "justificativa_tmp" in df.columns:
+        motivo_base = df["motivo_reprovacao"].fillna("").astype(str).str.strip()
+        justificativa_base = df["justificativa_tmp"].fillna("").astype(str).str.strip()
+        df["motivo_reprovacao"] = np.where(motivo_base != "", motivo_base, justificativa_base)
+
+    expected_cols = [
+        "operacao", "tipo", "responsavel", "resumo", "avaliacao", "link_relatorio",
+        "prioridade", "fase", "status", "valor_operacao", "ganho_mapa", "quem_trouxe",
+        "data_recebimento", "data_decisao", "chance_fechamento", "motivo_reprovacao", "semana_base",
+    ]
     for col in expected_cols:
         if col not in df.columns:
             df[col] = pd.NA
