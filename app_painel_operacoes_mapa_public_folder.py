@@ -8,6 +8,7 @@ from html import escape
 from difflib import SequenceMatcher
 
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -3298,10 +3299,16 @@ def render_operations_section(visao_painel: str):
     try:
         if arquivo_escolhido is not None:
             df = parse_pipeline_excel_from_path(arquivo_escolhido)
-            df_analisadas = parse_analyzed_operations_excel_from_path(arquivo_escolhido)
+            if visao_painel == "Analisadas e Declinadas":
+                df_analisadas = parse_analyzed_operations_excel_from_path(arquivo_escolhido)
+            else:
+                df_analisadas = pd.DataFrame()
         else:
             df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
-            df_analisadas = parse_analyzed_operations_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
+            if visao_painel == "Analisadas e Declinadas":
+                df_analisadas = parse_analyzed_operations_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
+            else:
+                df_analisadas = pd.DataFrame()
     except Exception as e:
         st.error(f"Erro ao ler a planilha: {e}")
         return
