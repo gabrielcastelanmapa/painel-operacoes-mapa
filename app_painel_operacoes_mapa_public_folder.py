@@ -731,6 +731,30 @@ def infer_sort_key_from_name(path: Path):
 
 
 
+
+def floor_to_saturday(series: pd.Series) -> pd.Series:
+    s = pd.to_datetime(series, errors="coerce")
+    return s - pd.to_timedelta((s.dt.weekday - 5) % 7, unit="D")
+
+
+def parse_semana_base(value):
+    if value is None or pd.isna(value):
+        return pd.NaT
+    text_value = str(value).strip()
+    if text_value in {"", "00:00:00", "0"}:
+        return pd.NaT
+    try:
+        parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+        if pd.isna(parsed):
+            return pd.NaT
+        # guard against time-only strings being interpreted as today
+        if isinstance(value, str) and ":" in text_value and "/" not in text_value and "-" not in text_value:
+            return pd.NaT
+        return pd.Timestamp(parsed).normalize()
+    except Exception:
+        return pd.NaT
+
+
 def parse_analyzed_operations_excel_from_bytes(file_bytes: bytes, file_name: str = "upload.xlsx"):
     tmp_path = Path(tempfile.gettempdir()) / f"analisadas_tmp_{normalize_file_match_text(file_name).replace(' ', '_')}.xlsx"
     tmp_path.write_bytes(file_bytes)
@@ -768,6 +792,8 @@ def parse_analyzed_operations_excel_from_path(file_path: Path):
         "Data da Reprovação / Aprovação": "data_decisao",
         "Chance de Fechamento": "chance_fechamento",
         "Motivo da Reprovação": "motivo_reprovacao",
+        "Justificativa": "motivo_reprovacao",
+        "Semana": "semana_base",
     }
     df = raw.rename(columns=rename_map).copy()
 
@@ -789,6 +815,8 @@ def parse_analyzed_operations_excel_from_path(file_path: Path):
 
     for col in ["data_recebimento", "data_decisao"]:
         df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+    df["semana_base"] = df["semana_base"].apply(parse_semana_base)
+    df["semana_base"] = df["semana_base"].where(df["semana_base"].notna(), floor_to_saturday(df["data_recebimento"]))
 
     df = df[df["operacao"].astype(str).str.strip() != ""].copy()
 
@@ -3429,12 +3457,22 @@ def render_analyzed_operations_filter_block(df_base: pd.DataFrame, key_prefix: s
 
 
 
-def build_analyzed_operations_weekly_summary(df_filtrado: pd.DataFrame) -> pd.DataFrame:
-    datas_receb = pd.to_datetime(df_filtrado.get("data_recebimento"), errors="coerce").dropna()
-    datas_dec = pd.to_datetime(df_filtrado.get("data_decisao"), errors="coerce").dropna()
 
-    datas_base = pd.concat([datas_receb, datas_dec], ignore_index=True)
-    if datas_base.empty:
+def build_analyzed_operations_weekly_summary(df_filtrado: pd.DataFrame) -> pd.DataFrame:
+    base = df_filtrado.copy()
+
+    base["semana_recebimento_ref"] = base["semana_base"].where(base["semana_base"].notna(), floor_to_saturday(base["data_recebimento"]))
+    base["semana_decisao_ref"] = floor_to_saturday(base["data_decisao"])
+
+    semanas_base = pd.concat(
+        [
+            base["semana_recebimento_ref"].dropna(),
+            base["semana_decisao_ref"].dropna(),
+        ],
+        ignore_index=True,
+    )
+
+    if semanas_base.empty:
         return pd.DataFrame(
             columns=[
                 "semana_inicio", "semana_fim", "semana_label", "recebidas_semana",
@@ -3444,20 +3482,19 @@ def build_analyzed_operations_weekly_summary(df_filtrado: pd.DataFrame) -> pd.Da
             ]
         )
 
-    data_min = datas_base.min().normalize()
-    data_max = datas_base.max().normalize()
-    intervalo = pd.interval_range(start=data_min, end=data_max + pd.Timedelta(days=7), freq="7D", closed="left")
+    semana_min = semanas_base.min().normalize()
+    semana_max = semanas_base.max().normalize()
+    eixo_semanas = pd.date_range(start=semana_min, end=semana_max, freq="7D")
 
     linhas = []
     recebidas_acc = 0
     devolvidas_acc = 0
 
-    receb = pd.to_datetime(df_filtrado.get("data_recebimento"), errors="coerce")
-    decis = pd.to_datetime(df_filtrado.get("data_decisao"), errors="coerce")
+    for semana_inicio in eixo_semanas:
+        semana_fim = semana_inicio + pd.Timedelta(days=7)
 
-    for iv in intervalo:
-        semana_df_receb = df_filtrado[(receb >= iv.left) & (receb < iv.right)].copy()
-        semana_df_dec = df_filtrado[(decis >= iv.left) & (decis < iv.right)].copy()
+        semana_df_receb = base[base["semana_recebimento_ref"] == semana_inicio].copy()
+        semana_df_dec = base[base["semana_decisao_ref"] == semana_inicio].copy()
 
         recebidas_semana = int(len(semana_df_receb))
         devolvidas_perdidas_semana = int(len(semana_df_dec))
@@ -3473,9 +3510,9 @@ def build_analyzed_operations_weekly_summary(df_filtrado: pd.DataFrame) -> pd.Da
 
         linhas.append(
             {
-                "semana_inicio": iv.left,
-                "semana_fim": iv.right,
-                "semana_label": iv.left.strftime("%d/%m/%Y"),
+                "semana_inicio": semana_inicio,
+                "semana_fim": semana_fim,
+                "semana_label": semana_inicio.strftime("%d/%m/%Y"),
                 "recebidas_semana": recebidas_semana,
                 "recebidas_acumulado": recebidas_acc,
                 "devolvidas_perdidas_semana": devolvidas_perdidas_semana,
@@ -3503,8 +3540,13 @@ def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
     tempo_medio = tempo_medio[tempo_medio >= 0]
     tempo_medio_val = tempo_medio.mean() if not tempo_medio.empty else np.nan
 
+    nao_aprovadas = df_filtrado[df_filtrado["fase"].fillna("").astype(str).str.contains(r"6\.\s*Não Aprovad", case=False, regex=True)].copy()
+    tempo_nao_aprovadas = pd.to_numeric(nao_aprovadas["tempo_devolucao_dias"], errors="coerce").dropna()
+    tempo_nao_aprovadas = tempo_nao_aprovadas[tempo_nao_aprovadas >= 0]
+    tempo_nao_aprovadas_val = tempo_nao_aprovadas.mean() if not tempo_nao_aprovadas.empty else np.nan
+
     st.markdown('<h4 class="subheader-inline" style="margin-top:10px;">Visão Geral</h4>', unsafe_allow_html=True)
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
     with m1:
         st.markdown(metric_card("Recebidas", f"{int(recebidas)}", "Quantidade total de operações recebidas"), unsafe_allow_html=True)
     with m2:
@@ -3517,11 +3559,21 @@ def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
         st.markdown(metric_card("Em Análise", f"{int(em_analise)}", "Operações ainda em evolução"), unsafe_allow_html=True)
     with m6:
         st.markdown(metric_card("Tempo Médio de Devolução", f"{round(float(tempo_medio_val), 1)} dias" if pd.notna(tempo_medio_val) else "—", "Média válida entre recebimento e decisão"), unsafe_allow_html=True)
+    with m7:
+        st.markdown(metric_card("Tempo de Devolução | Não Aprovadas", f"{round(float(tempo_nao_aprovadas_val), 1)} dias" if pd.notna(tempo_nao_aprovadas_val) else "—", "Somente fase 6. Não Aprovada / Não Aprovado"), unsafe_allow_html=True)
 
     if not resumo_semanal.empty:
         ultima = resumo_semanal.sort_values("semana_inicio").iloc[-1]
+        semana_inicio = ultima["semana_inicio"]
+        semana_fim = ultima["semana_fim"]
+        ultima_dec = df_filtrado[(pd.to_datetime(df_filtrado["data_decisao"], errors="coerce") >= semana_inicio) & (pd.to_datetime(df_filtrado["data_decisao"], errors="coerce") < semana_fim)].copy()
+        ultima_nao_aprovadas = ultima_dec[ultima_dec["fase"].fillna("").astype(str).str.contains(r"6\.\s*Não Aprovad", case=False, regex=True)].copy()
+        tempo_nao_aprovadas_semana = pd.to_numeric(ultima_nao_aprovadas["tempo_devolucao_dias"], errors="coerce").dropna()
+        tempo_nao_aprovadas_semana = tempo_nao_aprovadas_semana[tempo_nao_aprovadas_semana >= 0]
+        tempo_nao_aprovadas_semana_val = tempo_nao_aprovadas_semana.mean() if not tempo_nao_aprovadas_semana.empty else np.nan
+
         st.markdown('<h4 class="subheader-inline" style="margin-top:14px;">Última Semana | ' + escape(str(ultima["semana_label"])) + '</h4>', unsafe_allow_html=True)
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
         with c1:
             st.markdown(metric_card("Recebidas", f'{int(ultima["recebidas_semana"])}', "Entradas na semana"), unsafe_allow_html=True)
         with c2:
@@ -3535,6 +3587,10 @@ def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
         with c6:
             tempo_label = f'{round(float(ultima["tempo_medio_semana"]), 1)} dias' if pd.notna(ultima["tempo_medio_semana"]) else "—"
             st.markdown(metric_card("Tempo Médio de Devolução", tempo_label, "Média válida da semana"), unsafe_allow_html=True)
+        with c7:
+            tempo_nao_aprovadas_label = f'{round(float(tempo_nao_aprovadas_semana_val), 1)} dias' if pd.notna(tempo_nao_aprovadas_semana_val) else "—"
+            st.markdown(metric_card("Tempo de Devolução | Não Aprovadas", tempo_nao_aprovadas_label, "Somente fase 6 na semana"), unsafe_allow_html=True)
+
 
 
 
@@ -3544,22 +3600,24 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
     if resumo_semanal.empty:
         return
 
-    base_receb = base.dropna(subset=["data_recebimento"]).copy()
-    base_receb["semana_inicio"] = pd.to_datetime(base_receb["data_recebimento"], errors="coerce").dt.to_period("W-SUN").dt.start_time
+    base_receb = base.copy()
+    base_receb["semana_recebimento_ref"] = base_receb["semana_base"].where(base_receb["semana_base"].notna(), floor_to_saturday(base_receb["data_recebimento"]))
+    base_receb = base_receb.dropna(subset=["semana_recebimento_ref"]).copy()
 
     recebidas_semana_tipo = (
-        base_receb.groupby(["semana_inicio", "tipo"], dropna=False)
+        base_receb.groupby(["semana_recebimento_ref", "tipo"], dropna=False)
         .size()
         .reset_index(name="quantidade")
+        .sort_values(["semana_recebimento_ref", "tipo"])
     )
-    recebidas_semana_tipo["semana_label"] = recebidas_semana_tipo["semana_inicio"].dt.strftime("%d/%m/%Y")
+    recebidas_semana_tipo["semana_label"] = recebidas_semana_tipo["semana_recebimento_ref"].dt.strftime("%d/%m/%Y")
 
     tipo_order = make_options(recebidas_semana_tipo["tipo"])
     color_sequence = build_operation_color_sequence(tipo_order)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     for idx, tipo in enumerate(tipo_order):
-        subset = recebidas_semana_tipo[recebidas_semana_tipo["tipo"] == tipo].sort_values("semana_inicio")
+        subset = recebidas_semana_tipo[recebidas_semana_tipo["tipo"] == tipo].sort_values("semana_recebimento_ref")
         fig.add_trace(
             go.Bar(
                 x=subset["semana_label"],
@@ -3570,18 +3628,6 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
             ),
             secondary_y=False,
         )
-
-    fig.add_trace(
-        go.Bar(
-            x=resumo_semanal["semana_label"],
-            y=resumo_semanal["devolvidas_perdidas_semana"],
-            name="Devolvidas / Perdidas",
-            marker_color="#B8C2CC",
-            opacity=0.85,
-            hovertemplate="Semana: %{x}<br>Devolvidas / Perdidas: %{y}<extra></extra>",
-        ),
-        secondary_y=False,
-    )
 
     fig.add_trace(
         go.Scatter(
@@ -3626,7 +3672,7 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
         secondary_y=True,
     )
 
-    max_y_left = max([0] + recebidas_semana_tipo["quantidade"].fillna(0).tolist() + resumo_semanal["devolvidas_perdidas_semana"].fillna(0).tolist())
+    max_y_left = max([0] + recebidas_semana_tipo["quantidade"].fillna(0).tolist())
     max_y_right = max([0] + resumo_semanal["recebidas_acumulado"].fillna(0).tolist() + resumo_semanal["devolvidas_perdidas_acumulado"].fillna(0).tolist() + resumo_semanal["em_analise_acumulado"].fillna(0).tolist())
 
     fig.update_layout(
@@ -3635,7 +3681,7 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Montserrat, Arial", color=TEXT_DARK),
         title=dict(
-            text="Operações recebidas e devolvidas por semana | linhas acumuladas",
+            text="Operações recebidas por semana | barras por tipo e linhas acumuladas",
             font=dict(size=18, color=MAPA_NAVY),
         ),
         xaxis_title="Semana inicial",
@@ -3688,20 +3734,6 @@ def render_analyzed_operations_charts(df_filtrado: pd.DataFrame):
         st.plotly_chart(fig_resp, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    base_tempo = (
-        df_filtrado.dropna(subset=["tempo_devolucao_dias"])
-        .loc[lambda x: pd.to_numeric(x["tempo_devolucao_dias"], errors="coerce") >= 0]
-        .groupby("responsavel", dropna=False)["tempo_devolucao_dias"]
-        .mean()
-        .reset_index()
-        .sort_values("tempo_devolucao_dias", ascending=False)
-    )
-    if not base_tempo.empty:
-        fig_tempo = px.bar(base_tempo, x="responsavel", y="tempo_devolucao_dias", title="Tempo médio de devolução por responsável", text_auto=".1f", color_discrete_sequence=[MAPA_DARK_TEAL])
-        fig_tempo.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Montserrat, Arial", color=TEXT_DARK), title_font=dict(size=18, color=MAPA_NAVY), xaxis_title="", yaxis_title="Dias", margin=dict(l=10, r=10, t=50, b=10))
-        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
-        st.plotly_chart(fig_tempo, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def make_analyzed_inline_card_table(df_exibicao: pd.DataFrame) -> str:
