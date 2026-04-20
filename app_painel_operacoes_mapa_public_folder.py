@@ -792,12 +792,11 @@ def parse_analyzed_operations_excel_from_path(file_path: Path):
 
     df = df[df["operacao"].astype(str).str.strip() != ""].copy()
 
-    df["analisada_flag"] = (
-        df["data_decisao"].notna()
-        | df["status"].str.contains(r"declinad|reprovad|aprovad|aprova|não segui", case=False, na=False)
-    )
+    df["perdida_flag"] = df["status"].str.contains(r"perdid", case=False, na=False)
     df["declinada_flag"] = df["status"].str.contains(r"declinad|reprovad|não segui", case=False, na=False)
-    df["em_evolucao_flag"] = ~df["analisada_flag"]
+    df["devolvida_ou_perdida_flag"] = df["data_decisao"].notna() | df["declinada_flag"] | df["perdida_flag"]
+    df["analisada_flag"] = df["devolvida_ou_perdida_flag"] | df["status"].str.contains(r"aprovad|aprova", case=False, na=False)
+    df["em_analise_flag"] = ~df["devolvida_ou_perdida_flag"]
 
     df["data_inconsistente_flag"] = (
         df["data_recebimento"].notna()
@@ -3429,60 +3428,143 @@ def render_analyzed_operations_filter_block(df_base: pd.DataFrame, key_prefix: s
     return df_base.loc[mask].reset_index(drop=True).copy()
 
 
+
+def build_analyzed_operations_weekly_summary(df_filtrado: pd.DataFrame) -> pd.DataFrame:
+    datas_receb = pd.to_datetime(df_filtrado.get("data_recebimento"), errors="coerce").dropna()
+    datas_dec = pd.to_datetime(df_filtrado.get("data_decisao"), errors="coerce").dropna()
+
+    datas_base = pd.concat([datas_receb, datas_dec], ignore_index=True)
+    if datas_base.empty:
+        return pd.DataFrame(
+            columns=[
+                "semana_inicio", "semana_fim", "semana_label", "recebidas_semana",
+                "recebidas_acumulado", "devolvidas_perdidas_semana",
+                "devolvidas_perdidas_acumulado", "em_analise_acumulado",
+                "declinadas_semana", "perdidas_semana", "tempo_medio_semana",
+            ]
+        )
+
+    data_min = datas_base.min().normalize()
+    data_max = datas_base.max().normalize()
+    intervalo = pd.interval_range(start=data_min, end=data_max + pd.Timedelta(days=7), freq="7D", closed="left")
+
+    linhas = []
+    recebidas_acc = 0
+    devolvidas_acc = 0
+
+    receb = pd.to_datetime(df_filtrado.get("data_recebimento"), errors="coerce")
+    decis = pd.to_datetime(df_filtrado.get("data_decisao"), errors="coerce")
+
+    for iv in intervalo:
+        semana_df_receb = df_filtrado[(receb >= iv.left) & (receb < iv.right)].copy()
+        semana_df_dec = df_filtrado[(decis >= iv.left) & (decis < iv.right)].copy()
+
+        recebidas_semana = int(len(semana_df_receb))
+        devolvidas_perdidas_semana = int(len(semana_df_dec))
+        declinadas_semana = int(semana_df_dec["declinada_flag"].fillna(False).sum()) if "declinada_flag" in semana_df_dec.columns else 0
+        perdidas_semana = int(semana_df_dec["perdida_flag"].fillna(False).sum()) if "perdida_flag" in semana_df_dec.columns else 0
+
+        tempo_valido = pd.to_numeric(semana_df_dec["tempo_devolucao_dias"], errors="coerce").dropna()
+        tempo_valido = tempo_valido[tempo_valido >= 0]
+        tempo_medio_semana = float(tempo_valido.mean()) if not tempo_valido.empty else np.nan
+
+        recebidas_acc += recebidas_semana
+        devolvidas_acc += devolvidas_perdidas_semana
+
+        linhas.append(
+            {
+                "semana_inicio": iv.left,
+                "semana_fim": iv.right,
+                "semana_label": iv.left.strftime("%d/%m/%Y"),
+                "recebidas_semana": recebidas_semana,
+                "recebidas_acumulado": recebidas_acc,
+                "devolvidas_perdidas_semana": devolvidas_perdidas_semana,
+                "devolvidas_perdidas_acumulado": devolvidas_acc,
+                "em_analise_acumulado": recebidas_acc - devolvidas_acc,
+                "declinadas_semana": declinadas_semana,
+                "perdidas_semana": perdidas_semana,
+                "tempo_medio_semana": tempo_medio_semana,
+            }
+        )
+
+    return pd.DataFrame(linhas)
+
+
 def render_analyzed_operations_metric_cards(df_filtrado: pd.DataFrame):
+    resumo_semanal = build_analyzed_operations_weekly_summary(df_filtrado)
+
     recebidas = len(df_filtrado)
     analisadas = int(df_filtrado["analisada_flag"].fillna(False).sum()) if "analisada_flag" in df_filtrado.columns else 0
     declinadas = int(df_filtrado["declinada_flag"].fillna(False).sum()) if "declinada_flag" in df_filtrado.columns else 0
+    perdidas = int(df_filtrado["perdida_flag"].fillna(False).sum()) if "perdida_flag" in df_filtrado.columns else 0
+    em_analise = int(df_filtrado["em_analise_flag"].fillna(False).sum()) if "em_analise_flag" in df_filtrado.columns else 0
+
     tempo_medio = pd.to_numeric(df_filtrado["tempo_devolucao_dias"], errors="coerce").dropna()
     tempo_medio = tempo_medio[tempo_medio >= 0]
     tempo_medio_val = tempo_medio.mean() if not tempo_medio.empty else np.nan
 
-    m1, m2, m3, m4 = st.columns(4)
+    st.markdown('<h4 class="subheader-inline" style="margin-top:10px;">Visão Geral</h4>', unsafe_allow_html=True)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
-        st.markdown(metric_card("Recebidas", f"{int(recebidas)}", "Quantidade de operações recebidas"), unsafe_allow_html=True)
+        st.markdown(metric_card("Recebidas", f"{int(recebidas)}", "Quantidade total de operações recebidas"), unsafe_allow_html=True)
     with m2:
         st.markdown(metric_card("Analisadas", f"{int(analisadas)}", "Operações com decisão / retorno"), unsafe_allow_html=True)
     with m3:
         st.markdown(metric_card("Declinadas / Reprovadas", f"{int(declinadas)}", "Status de declínio ou reprovação"), unsafe_allow_html=True)
     with m4:
+        st.markdown(metric_card("Perdidas", f"{int(perdidas)}", "Operações marcadas como perdidas"), unsafe_allow_html=True)
+    with m5:
+        st.markdown(metric_card("Em Análise", f"{int(em_analise)}", "Operações ainda em evolução"), unsafe_allow_html=True)
+    with m6:
         st.markdown(metric_card("Tempo Médio de Devolução", f"{round(float(tempo_medio_val), 1)} dias" if pd.notna(tempo_medio_val) else "—", "Média válida entre recebimento e decisão"), unsafe_allow_html=True)
+
+    if not resumo_semanal.empty:
+        ultima = resumo_semanal.sort_values("semana_inicio").iloc[-1]
+        st.markdown('<h4 class="subheader-inline" style="margin-top:14px;">Última Semana | ' + escape(str(ultima["semana_label"])) + '</h4>', unsafe_allow_html=True)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        with c1:
+            st.markdown(metric_card("Recebidas", f'{int(ultima["recebidas_semana"])}', "Entradas na semana"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(metric_card("Analisadas", f'{int(ultima["devolvidas_perdidas_semana"])}', "Devolvidas / perdidas na semana"), unsafe_allow_html=True)
+        with c3:
+            st.markdown(metric_card("Declinadas / Reprovadas", f'{int(ultima["declinadas_semana"])}', "Declínios na semana"), unsafe_allow_html=True)
+        with c4:
+            st.markdown(metric_card("Perdidas", f'{int(ultima["perdidas_semana"])}', "Perdidas na semana"), unsafe_allow_html=True)
+        with c5:
+            st.markdown(metric_card("Em Análise", f'{int(ultima["em_analise_acumulado"])}', "Saldo em análise ao fim da semana"), unsafe_allow_html=True)
+        with c6:
+            tempo_label = f'{round(float(ultima["tempo_medio_semana"]), 1)} dias' if pd.notna(ultima["tempo_medio_semana"]) else "—"
+            st.markdown(metric_card("Tempo Médio de Devolução", tempo_label, "Média válida da semana"), unsafe_allow_html=True)
 
 
 
 def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
-    base = df_filtrado.dropna(subset=["semana_recebimento"]).copy()
-    if base.empty:
+    base = df_filtrado.copy()
+    resumo_semanal = build_analyzed_operations_weekly_summary(base)
+    if resumo_semanal.empty:
         return
 
+    base_receb = base.dropna(subset=["data_recebimento"]).copy()
+    base_receb["semana_inicio"] = pd.to_datetime(base_receb["data_recebimento"], errors="coerce").dt.to_period("W-SUN").dt.start_time
+
     recebidas_semana_tipo = (
-        base.groupby(["semana_recebimento", "semana_recebimento_label", "tipo"], dropna=False)
+        base_receb.groupby(["semana_inicio", "tipo"], dropna=False)
         .size()
         .reset_index(name="quantidade")
-        .sort_values(["semana_recebimento", "tipo"])
     )
-
-    linha_semana = (
-        base.groupby(["semana_recebimento", "semana_recebimento_label"], dropna=False)
-        .agg(
-            recebidas=("operacao", "count"),
-            devolvidas_qtd=("analisada_flag", lambda s: int(pd.Series(s).fillna(False).sum())),
-            em_evolucao_qtd=("em_evolucao_flag", lambda s: int(pd.Series(s).fillna(False).sum())),
-        )
-        .reset_index()
-        .sort_values("semana_recebimento")
-    )
+    recebidas_semana_tipo["semana_label"] = recebidas_semana_tipo["semana_inicio"].dt.strftime("%d/%m/%Y")
 
     tipo_order = make_options(recebidas_semana_tipo["tipo"])
     color_sequence = build_operation_color_sequence(tipo_order)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     for idx, tipo in enumerate(tipo_order):
-        subset = recebidas_semana_tipo[recebidas_semana_tipo["tipo"] == tipo]
+        subset = recebidas_semana_tipo[recebidas_semana_tipo["tipo"] == tipo].sort_values("semana_inicio")
         fig.add_trace(
             go.Bar(
-                x=subset["semana_recebimento_label"],
+                x=subset["semana_label"],
                 y=subset["quantidade"],
-                name=tipo,
+                name=f"Recebidas | {tipo}",
                 marker_color=color_sequence[idx % len(color_sequence)],
                 hovertemplate="Semana: %{x}<br>Tipo: " + str(tipo) + "<br>Recebidas: %{y}<extra></extra>",
             ),
@@ -3490,40 +3572,62 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
         )
 
     fig.add_trace(
+        go.Bar(
+            x=resumo_semanal["semana_label"],
+            y=resumo_semanal["devolvidas_perdidas_semana"],
+            name="Devolvidas / Perdidas",
+            marker_color="#B8C2CC",
+            opacity=0.85,
+            hovertemplate="Semana: %{x}<br>Devolvidas / Perdidas: %{y}<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
         go.Scatter(
-            x=linha_semana["semana_recebimento_label"],
-            y=linha_semana["devolvidas_qtd"],
-            name="Qtd. devolvidas",
+            x=resumo_semanal["semana_label"],
+            y=resumo_semanal["recebidas_acumulado"],
+            name="Recebidas (Acumulado)",
             mode="lines+markers+text",
-            text=[f"{int(v)}" for v in linha_semana["devolvidas_qtd"]],
+            text=[str(int(v)) for v in resumo_semanal["recebidas_acumulado"]],
             textposition="top center",
             line=dict(color=MAPA_NAVY, width=3),
             marker=dict(size=8, color=MAPA_NAVY),
-            hovertemplate="Semana: %{x}<br>Qtd. devolvidas: %{y}<extra></extra>",
+            hovertemplate="Semana: %{x}<br>Recebidas (Acumulado): %{y}<extra></extra>",
         ),
         secondary_y=True,
     )
     fig.add_trace(
         go.Scatter(
-            x=linha_semana["semana_recebimento_label"],
-            y=linha_semana["em_evolucao_qtd"],
-            name="Qtd. em evolução",
+            x=resumo_semanal["semana_label"],
+            y=resumo_semanal["devolvidas_perdidas_acumulado"],
+            name="Devolvidas / Perdidas (Acumulado)",
             mode="lines+markers+text",
-            text=[f"{int(v)}" for v in linha_semana["em_evolucao_qtd"]],
+            text=[str(int(v)) for v in resumo_semanal["devolvidas_perdidas_acumulado"]],
             textposition="bottom center",
             line=dict(color=MAPA_DARK_TEAL, width=3, dash="dash"),
             marker=dict(size=8, color=MAPA_DARK_TEAL),
-            hovertemplate="Semana: %{x}<br>Qtd. em evolução: %{y}<extra></extra>",
+            hovertemplate="Semana: %{x}<br>Devolvidas / Perdidas (Acumulado): %{y}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=resumo_semanal["semana_label"],
+            y=resumo_semanal["em_analise_acumulado"],
+            name="Em Análise (Acumulado)",
+            mode="lines+markers+text",
+            text=[str(int(v)) for v in resumo_semanal["em_analise_acumulado"]],
+            textposition="middle right",
+            line=dict(color="#D18A2E", width=3),
+            marker=dict(size=8, color="#D18A2E"),
+            hovertemplate="Semana: %{x}<br>Em Análise (Acumulado): %{y}<extra></extra>",
         ),
         secondary_y=True,
     )
 
-    max_y = max(
-        [0]
-        + recebidas_semana_tipo["quantidade"].fillna(0).tolist()
-        + linha_semana["devolvidas_qtd"].fillna(0).tolist()
-        + linha_semana["em_evolucao_qtd"].fillna(0).tolist()
-    )
+    max_y_left = max([0] + recebidas_semana_tipo["quantidade"].fillna(0).tolist() + resumo_semanal["devolvidas_perdidas_semana"].fillna(0).tolist())
+    max_y_right = max([0] + resumo_semanal["recebidas_acumulado"].fillna(0).tolist() + resumo_semanal["devolvidas_perdidas_acumulado"].fillna(0).tolist() + resumo_semanal["em_analise_acumulado"].fillna(0).tolist())
 
     fig.update_layout(
         barmode="stack",
@@ -3531,19 +3635,23 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Montserrat, Arial", color=TEXT_DARK),
         title=dict(
-            text="Operações recebidas por semana | acumulado por tipo + qtd. devolvidas / em evolução",
+            text="Operações recebidas e devolvidas por semana | linhas acumuladas",
             font=dict(size=18, color=MAPA_NAVY),
         ),
-        xaxis_title="Semana de recebimento",
-        yaxis_title="Nº de operações recebidas",
-        legend_title_text="Tipo / Indicador",
+        xaxis_title="Semana inicial",
+        yaxis_title="Nº de operações da semana",
+        legend_title_text="Categoria / Linha",
         margin=dict(l=10, r=10, t=70, b=10),
         hovermode="x unified",
-        height=480,
+        height=520,
     )
-    fig.update_xaxes(type="category")
-    fig.update_yaxes(title_text="Nº de operações recebidas", secondary_y=False)
-    fig.update_yaxes(title_text="Qtd. de operações", range=[0, max_y * 1.15 if max_y > 0 else 1], secondary_y=True)
+    fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=resumo_semanal.sort_values("semana_inicio")["semana_label"].tolist(),
+    )
+    fig.update_yaxes(title_text="Nº de operações da semana", range=[0, max_y_left * 1.2 if max_y_left > 0 else 1], secondary_y=False)
+    fig.update_yaxes(title_text="Acumulado", range=[0, max_y_right * 1.2 if max_y_right > 0 else 1], secondary_y=True)
 
     st.markdown('<div class="chart-box">', unsafe_allow_html=True)
     st.plotly_chart(fig, use_container_width=True)
@@ -3768,7 +3876,7 @@ def render_analyzed_operations_section(df_base: pd.DataFrame):
         return
 
     df_filtrado = render_analyzed_operations_filter_block(df_base, key_prefix="analisadas_declinadas")
-    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da aba de operações analisadas / reprovadas, sem comparativo com a base anterior.")
+    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da aba de operações analisadas / reprovadas, sem comparativo com a base anterior. O gráfico semanal segue o racional de recebidas por data de recebimento, devolvidas/perdidas por data de decisão e linhas acumuladas.")
 
     inconsistentes = df_filtrado[df_filtrado.get("data_inconsistente_flag", False)].copy()
     if not inconsistentes.empty:
