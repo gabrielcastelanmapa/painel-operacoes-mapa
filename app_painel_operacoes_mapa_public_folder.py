@@ -510,16 +510,23 @@ def inject_brand_css():
         .metric-value-row {{
             display: flex;
             align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
+            gap: 8px;
+            flex-wrap: nowrap;
+            white-space: nowrap;
+            min-width: 0;
         }}
 
         .metric-value {{
-            font-size: 1.65rem;
+            font-size: clamp(1.08rem, 0.65vw + 0.58rem, 1.45rem);
             font-weight: 800;
             color: {MAPA_NAVY};
-            line-height: 1.1;
-            word-break: break-word;
+            line-height: 1.05;
+            white-space: nowrap;
+            word-break: normal;
+            overflow-wrap: normal;
+            letter-spacing: -0.01em;
+            flex: 0 1 auto;
+            min-width: 0;
         }}
 
         .metric-trend {{
@@ -1595,8 +1602,8 @@ def metric_card(label, value, sub=None, trend="flat", previous_value_label=None,
     <div class="metric-card">
         <div class="metric-label">{escape(label)}</div>
         <div class="metric-value-row">
-            <div class="metric-value">{escape(value)}</div>
             {trend_html}
+            <div class="metric-value">{escape(value)}</div>
         </div>
         {sub_html}
     </div>
@@ -3220,7 +3227,7 @@ def render_sidebar_menu():
         st.markdown("### Menu")
         sessao = st.radio(
             "Sessão",
-            options=["Operações", "Controle de Documentos"],
+            options=["Novas Oportunidades", "Operações", "Controle de Documentos"],
             index=0,
             key="sidebar_sessao_mapa",
         )
@@ -3229,11 +3236,11 @@ def render_sidebar_menu():
             st.markdown("#### Subsessões")
             subsessao = st.radio(
                 "Operações",
-                options=["Top Five", "Secundárias", "Consolidado", "Analisadas e Declinadas"],
+                options=["Top Five", "Secundárias", "Consolidado"],
                 index=0,
                 key="sidebar_subsessao_operacoes",
             )
-        st.caption("Use o menu lateral para alternar entre o painel comercial e o controle de documentos.")
+        st.caption("Use o menu lateral para alternar entre Novas Oportunidades, o painel comercial e o controle de documentos.")
     return sessao, subsessao
 
 
@@ -3377,7 +3384,7 @@ def render_operations_section(visao_painel: str):
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Operações</h3>
-                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias, Consolidado e Operações Analisadas e Declinadas.</p>
+                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias e Consolidado.</p>
             </div>
         </div>
         """,
@@ -3436,7 +3443,7 @@ def render_operations_section(visao_painel: str):
 
 def render_analyzed_operations_filter_block(df_base: pd.DataFrame, key_prefix: str = "analisadas"):
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-head"><h3 class="section-title">Filtros | Operações Analisadas e Declinadas</h3><p class="section-note">Os filtros abaixo impactam métricas, gráficos e tabela da aba de operações analisadas/reprovadas.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-head"><h3 class="section-title">Filtros | Novas Oportunidades</h3><p class="section-note">Os filtros abaixo impactam métricas, gráficos e tabela da aba de operações analisadas/reprovadas.</p></div>', unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -3717,7 +3724,7 @@ def render_analyzed_operations_weekly_chart(df_filtrado: pd.DataFrame):
 
 def render_analyzed_operations_charts(df_filtrado: pd.DataFrame):
     if df_filtrado.empty:
-        render_empty_state("Operações Analisadas e Declinadas", "Nenhuma operação encontrada para os filtros atuais.")
+        render_empty_state("Novas Oportunidades", "Nenhuma operação encontrada para os filtros atuais.")
         return
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
@@ -3914,7 +3921,7 @@ def render_analyzed_operations_open_pipeline_table(df_filtrado: pd.DataFrame):
 def render_analyzed_operations_table(df_filtrado: pd.DataFrame):
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<h3 class="subheader-inline">Operações Analisadas e Declinadas | Base detalhada</h3>', unsafe_allow_html=True)
+    st.markdown('<h3 class="subheader-inline">Novas Oportunidades | Base detalhada</h3>', unsafe_allow_html=True)
     st.markdown('<p class="section-note" style="margin-bottom: 10px;">Tabela detalhada com card expansível para resumo, análise e motivo do declínio/reprovação.</p>', unsafe_allow_html=True)
 
     if df_filtrado.empty:
@@ -3924,7 +3931,7 @@ def render_analyzed_operations_table(df_filtrado: pd.DataFrame):
 
     csv = df_filtrado.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        label="Baixar CSV | Operações Analisadas e Declinadas",
+        label="Baixar CSV | Novas Oportunidades",
         data=csv,
         file_name="operacoes_analisadas_declinadas.csv",
         mime="text/csv",
@@ -3943,7 +3950,7 @@ def render_analyzed_operations_section(df_base: pd.DataFrame):
         """
         <div class="section-card">
             <div class="section-head">
-                <h3 class="section-title">Operações Analisadas e Declinadas</h3>
+                <h3 class="section-title">Novas Oportunidades</h3>
                 <p class="section-note">Visão executiva da aba específica da planilha com operações recebidas, analisadas e declinadas, incluindo tempo médio de devolução e detalhamento de análise. Nesta seção, não há comparativo com a base anterior.</p>
             </div>
         </div>
@@ -4125,7 +4132,9 @@ def render_document_control_section():
 
 sessao_menu, visao_operacoes_menu = render_sidebar_menu()
 
-if sessao_menu == "Operações":
+if sessao_menu == "Novas Oportunidades":
+    render_operations_section("Analisadas e Declinadas")
+elif sessao_menu == "Operações":
     render_operations_section(visao_operacoes_menu or "Top Five")
 else:
     render_document_control_section()
