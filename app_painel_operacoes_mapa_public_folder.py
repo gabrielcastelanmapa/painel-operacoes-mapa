@@ -762,6 +762,7 @@ def parse_semana_base(value):
         return pd.NaT
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_analyzed_operations_excel_from_bytes(file_bytes: bytes, file_name: str = "upload.xlsx"):
     tmp_path = Path(tempfile.gettempdir()) / f"analisadas_tmp_{normalize_file_match_text(file_name).replace(' ', '_')}.xlsx"
     tmp_path.write_bytes(file_bytes)
@@ -774,6 +775,7 @@ def parse_analyzed_operations_excel_from_bytes(file_bytes: bytes, file_name: str
             pass
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_analyzed_operations_excel_from_path(file_path: Path):
     workbook = pd.ExcelFile(file_path)
     target_sheet = "Operação Analisada ou Reprovada"
@@ -1031,6 +1033,7 @@ def listar_arquivos_excel_locais(
     return arquivos
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_pipeline_excel_from_bytes(file_bytes: bytes, file_name: str = "upload.xlsx"):
     suffix = Path(file_name).suffix or ".xlsx"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -1045,6 +1048,7 @@ def parse_pipeline_excel_from_bytes(file_bytes: bytes, file_name: str = "upload.
             pass
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_pipeline_excel_from_path(file_path: Path):
     wb = load_workbook(filename=str(file_path), data_only=True)
     if "Pipeline" not in wb.sheetnames:
@@ -2848,6 +2852,7 @@ def listar_arquivos_documentos_locais(
     return arquivos
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_document_control_excel_from_path(path: str | Path):
     excel_path = Path(path)
     workbook = pd.ExcelFile(excel_path)
@@ -2918,6 +2923,7 @@ def parse_document_control_excel_from_path(path: str | Path):
     return df.reset_index(drop=True)
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_document_control_excel_from_bytes(file_bytes: bytes, file_name: str = "upload_documentos.xlsx"):
     temp_dir = Path(tempfile.mkdtemp(prefix="mapa_docs_upload_"))
     temp_path = temp_dir / file_name
@@ -2925,6 +2931,7 @@ def parse_document_control_excel_from_bytes(file_bytes: bytes, file_name: str = 
     return parse_document_control_excel_from_path(temp_path)
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def parse_document_legendas_from_path(path: str | Path):
     excel_path = Path(path)
     workbook = pd.ExcelFile(excel_path)
@@ -3245,6 +3252,8 @@ def render_sidebar_menu():
 
 
 def render_operations_section(visao_painel: str):
+    is_novas_oportunidades = visao_painel == "Analisadas e Declinadas"
+
     drive_error = None
     fonte_dados = "Google Drive público"
     arquivos_excel = []
@@ -3290,30 +3299,31 @@ def render_operations_section(visao_painel: str):
         else:
             arquivo_escolhido = next(a for a in arquivos_excel if a.name == arquivo_escolhido_nome)
 
-        arquivo_anterior_auto = find_previous_file_by_name(arquivos_excel, arquivo_escolhido)
-        opcoes_comparativo = [a for a in arquivos_excel if a.name != arquivo_escolhido.name]
-        nomes_comparativo = [a.name for a in opcoes_comparativo]
+        if not is_novas_oportunidades:
+            arquivo_anterior_auto = find_previous_file_by_name(arquivos_excel, arquivo_escolhido)
+            opcoes_comparativo = [a for a in arquivos_excel if a.name != arquivo_escolhido.name]
+            nomes_comparativo = [a.name for a in opcoes_comparativo]
 
-        idx_comparativo = 0
-        if arquivo_anterior_auto is not None and arquivo_anterior_auto.name in nomes_comparativo:
-            idx_comparativo = nomes_comparativo.index(arquivo_anterior_auto.name)
+            idx_comparativo = 0
+            if arquivo_anterior_auto is not None and arquivo_anterior_auto.name in nomes_comparativo:
+                idx_comparativo = nomes_comparativo.index(arquivo_anterior_auto.name)
 
-        col_c, col_d = st.columns([3, 1])
-        with col_c:
-            arquivo_anterior_nome = st.selectbox(
-                "Selecione a planilha comparativa",
-                options=nomes_comparativo if nomes_comparativo else ["Sem comparativo disponível"],
-                index=idx_comparativo if nomes_comparativo else 0,
-                key="pipeline_compare_file_select",
-            )
-        with col_d:
-            usar_comparativo_automatico = st.checkbox("Usar comparativo automático", value=True, key="pipeline_use_auto_compare")
+            col_c, col_d = st.columns([3, 1])
+            with col_c:
+                arquivo_anterior_nome = st.selectbox(
+                    "Selecione a planilha comparativa",
+                    options=nomes_comparativo if nomes_comparativo else ["Sem comparativo disponível"],
+                    index=idx_comparativo if nomes_comparativo else 0,
+                    key="pipeline_compare_file_select",
+                )
+            with col_d:
+                usar_comparativo_automatico = st.checkbox("Usar comparativo automático", value=True, key="pipeline_use_auto_compare")
 
-        if usar_comparativo_automatico:
-            arquivo_anterior = arquivo_anterior_auto
-        else:
-            if nomes_comparativo and arquivo_anterior_nome != "Sem comparativo disponível":
-                arquivo_anterior = next(a for a in opcoes_comparativo if a.name == arquivo_anterior_nome)
+            if usar_comparativo_automatico:
+                arquivo_anterior = arquivo_anterior_auto
+            else:
+                if nomes_comparativo and arquivo_anterior_nome != "Sem comparativo disponível":
+                    arquivo_anterior = next(a for a in opcoes_comparativo if a.name == arquivo_anterior_nome)
     else:
         arquivo_upload = st.file_uploader(
             "Envie a planilha Pipeline",
@@ -3342,30 +3352,33 @@ def render_operations_section(visao_painel: str):
         return
 
     try:
-        if arquivo_escolhido is not None:
-            df = parse_pipeline_excel_from_path(arquivo_escolhido)
-            if visao_painel == "Analisadas e Declinadas":
+        if is_novas_oportunidades:
+            if arquivo_escolhido is not None:
+                df = pd.DataFrame()
                 df_analisadas = parse_analyzed_operations_excel_from_path(arquivo_escolhido)
             else:
-                df_analisadas = pd.DataFrame()
-        else:
-            df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
-            if visao_painel == "Analisadas e Declinadas":
+                df = pd.DataFrame()
                 df_analisadas = parse_analyzed_operations_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
+        else:
+            if arquivo_escolhido is not None:
+                df = parse_pipeline_excel_from_path(arquivo_escolhido)
+                df_analisadas = pd.DataFrame()
             else:
+                df = parse_pipeline_excel_from_bytes(arquivo_upload.getvalue(), arquivo_upload.name)
                 df_analisadas = pd.DataFrame()
     except Exception as e:
         st.error(f"Erro ao ler a planilha: {e}")
         return
 
     df_anterior = pd.DataFrame()
-    try:
-        if arquivo_anterior is not None:
-            df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
-    except Exception:
-        df_anterior = pd.DataFrame()
+    if not is_novas_oportunidades:
+        try:
+            if arquivo_anterior is not None:
+                df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
+        except Exception:
+            df_anterior = pd.DataFrame()
 
-    arquivo_anterior_label = arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior"
+    arquivo_anterior_label = "Não se aplica" if is_novas_oportunidades else (arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior")
 
     st.markdown(
         f"""
@@ -3373,6 +3386,7 @@ def render_operations_section(visao_painel: str):
             <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
             <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
             <span class="meta-pill"><span class="dot"></span>Comparativo: {escape(arquivo_anterior_label)}</span>
+            <span class="meta-pill"><span class="dot"></span>Modo de carga: {"Sob demanda" if is_novas_oportunidades else "Sob demanda + comparativo"}</span>
         </div>
         </div>
         """,
@@ -3384,7 +3398,7 @@ def render_operations_section(visao_painel: str):
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Operações</h3>
-                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias e Consolidado.</p>
+                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias e Consolidado. Cada sessão carrega apenas a base necessária quando é aberta.</p>
             </div>
         </div>
         """,
