@@ -1,6 +1,8 @@
 import re
 import json
 import base64
+import hashlib
+import traceback
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -56,6 +58,16 @@ def order_categories(values):
         if normalized and normalized not in present:
             present.append(normalized)
     return sorted(present, key=lambda item: (extract_leading_number(item), item.lower()))
+
+
+
+def calculate_file_sha256(file_path: Path) -> str:
+    hasher = hashlib.sha256()
+    with Path(file_path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
 
 
 def normalize_file_match_text(value: str) -> str:
@@ -1375,6 +1387,24 @@ def summarize_names(names, max_items: int = 3) -> str:
     return "; ".join(names[:max_items]) + f"; e mais {restantes}"
 
 
+
+def safe_numeric_series(df: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if isinstance(df, pd.DataFrame):
+        if column in df.columns:
+            return pd.to_numeric(df[column], errors="coerce").fillna(default)
+        return pd.Series(default, index=df.index, dtype="float64")
+    return pd.Series(dtype="float64")
+
+
+def safe_text_series(df: pd.DataFrame, column: str, default: str = "") -> pd.Series:
+    if isinstance(df, pd.DataFrame):
+        if column in df.columns:
+            return df[column].fillna(default).astype(str)
+        return pd.Series(default, index=df.index, dtype="object")
+    return pd.Series(dtype="object")
+
+
+
 def build_driver_rows(df_atual: pd.DataFrame, df_anterior: pd.DataFrame) -> pd.DataFrame:
     atual = aggregate_operations_for_compare(df_atual)
     anterior = aggregate_operations_for_compare(df_anterior)
@@ -1387,12 +1417,12 @@ def build_driver_rows(df_atual: pd.DataFrame, df_anterior: pd.DataFrame) -> pd.D
     )
 
     for col in ["cliente", "operacao", "status", "chance_fechamento"]:
-        merged[f"{col}_atual"] = merged.get(f"{col}_atual", "").fillna("")
-        merged[f"{col}_anterior"] = merged.get(f"{col}_anterior", "").fillna("")
+        merged[f"{col}_atual"] = safe_text_series(merged, f"{col}_atual")
+        merged[f"{col}_anterior"] = safe_text_series(merged, f"{col}_anterior")
 
     for col in ["valor_operacao", "valor_ponderado", "comissao_mapa", "comissao_mapa_ponderada"]:
-        merged[f"{col}_atual"] = pd.to_numeric(merged.get(f"{col}_atual", 0), errors="coerce").fillna(0.0)
-        merged[f"{col}_anterior"] = pd.to_numeric(merged.get(f"{col}_anterior", 0), errors="coerce").fillna(0.0)
+        merged[f"{col}_atual"] = safe_numeric_series(merged, f"{col}_atual")
+        merged[f"{col}_anterior"] = safe_numeric_series(merged, f"{col}_anterior")
 
     return merged
 
@@ -1465,10 +1495,10 @@ def build_metric_reason_text(metric_name: str, df_atual: pd.DataFrame, df_anteri
         return " ".join(explicacoes)
 
     if metric_name == "Ticket Médio":
-        total_atual = pd.to_numeric(df_atual["valor_operacao"], errors="coerce").fillna(0).sum()
-        total_anterior = pd.to_numeric(df_anterior["valor_operacao"], errors="coerce").fillna(0).sum()
-        qtd_atual = len(df_atual)
-        qtd_anterior = len(df_anterior)
+        total_atual = safe_numeric_series(df_atual, "valor_operacao").sum()
+        total_anterior = safe_numeric_series(df_anterior, "valor_operacao").sum()
+        qtd_atual = len(df_atual) if isinstance(df_atual, pd.DataFrame) else 0
+        qtd_anterior = len(df_anterior) if isinstance(df_anterior, pd.DataFrame) else 0
 
         partes = []
         if qtd_atual != qtd_anterior:
@@ -1578,18 +1608,28 @@ def render_metric_changes_panel(df_intro_atual: pd.DataFrame, df_intro_anterior:
 
         st.markdown("---")
 
-        total_atual = len(df_metric_atual)
-        total_anterior = len(df_metric_anterior)
-        valor_total_atual = pd.to_numeric(df_metric_atual.get("valor_operacao", 0), errors="coerce").fillna(0).sum()
-        valor_total_anterior = pd.to_numeric(df_metric_anterior.get("valor_operacao", 0), errors="coerce").fillna(0).sum()
-        valor_ponderado_atual = pd.to_numeric(df_metric_atual.get("valor_ponderado", 0), errors="coerce").fillna(0).sum()
-        valor_ponderado_anterior = pd.to_numeric(df_metric_anterior.get("valor_ponderado", 0), errors="coerce").fillna(0).sum()
-        comissao_atual = pd.to_numeric(df_metric_atual.get("comissao_mapa", 0), errors="coerce").fillna(0).sum()
-        comissao_anterior = pd.to_numeric(df_metric_anterior.get("comissao_mapa", 0), errors="coerce").fillna(0).sum()
-        comissao_pond_atual = pd.to_numeric(df_metric_atual.get("comissao_mapa_ponderada", 0), errors="coerce").fillna(0).sum()
-        comissao_pond_anterior = pd.to_numeric(df_metric_anterior.get("comissao_mapa_ponderada", 0), errors="coerce").fillna(0).sum()
-        ticket_atual = pd.to_numeric(df_metric_atual.get("valor_operacao", 0), errors="coerce").fillna(0).mean() if len(df_metric_atual) > 0 else 0
-        ticket_anterior = pd.to_numeric(df_metric_anterior.get("valor_operacao", 0), errors="coerce").fillna(0).mean() if len(df_metric_anterior) > 0 else 0
+        total_atual = len(df_metric_atual) if isinstance(df_metric_atual, pd.DataFrame) else 0
+        total_anterior = len(df_metric_anterior) if isinstance(df_metric_anterior, pd.DataFrame) else 0
+
+        valor_total_atual_series = safe_numeric_series(df_metric_atual, "valor_operacao")
+        valor_total_anterior_series = safe_numeric_series(df_metric_anterior, "valor_operacao")
+        valor_ponderado_atual_series = safe_numeric_series(df_metric_atual, "valor_ponderado")
+        valor_ponderado_anterior_series = safe_numeric_series(df_metric_anterior, "valor_ponderado")
+        comissao_atual_series = safe_numeric_series(df_metric_atual, "comissao_mapa")
+        comissao_anterior_series = safe_numeric_series(df_metric_anterior, "comissao_mapa")
+        comissao_pond_atual_series = safe_numeric_series(df_metric_atual, "comissao_mapa_ponderada")
+        comissao_pond_anterior_series = safe_numeric_series(df_metric_anterior, "comissao_mapa_ponderada")
+
+        valor_total_atual = valor_total_atual_series.sum()
+        valor_total_anterior = valor_total_anterior_series.sum()
+        valor_ponderado_atual = valor_ponderado_atual_series.sum()
+        valor_ponderado_anterior = valor_ponderado_anterior_series.sum()
+        comissao_atual = comissao_atual_series.sum()
+        comissao_anterior = comissao_anterior_series.sum()
+        comissao_pond_atual = comissao_pond_atual_series.sum()
+        comissao_pond_anterior = comissao_pond_anterior_series.sum()
+        ticket_atual = valor_total_atual_series.mean() if total_atual > 0 else 0
+        ticket_anterior = valor_total_anterior_series.mean() if total_anterior > 0 else 0
 
         col1, col2 = st.columns(2)
         metric_texts = [
@@ -2100,8 +2140,10 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
 
 
 def apply_dashboard_filter_state(df_base: pd.DataFrame, filter_state: dict | None) -> pd.DataFrame:
-    if df_base is None or df_base.empty:
+    if df_base is None:
         return pd.DataFrame()
+    if df_base.empty:
+        return df_base.reset_index(drop=True).copy()
 
     if not filter_state:
         return df_base.reset_index(drop=True).copy()
@@ -2129,8 +2171,10 @@ def build_filtered_dashboard_view(df_filtrado: pd.DataFrame) -> pd.DataFrame:
 
 
 def filter_metrics_base(df: pd.DataFrame | None) -> pd.DataFrame:
-    if df is None or df.empty:
+    if df is None:
         return pd.DataFrame()
+    if df.empty:
+        return df.reset_index(drop=True).copy()
 
     base = df.copy()
     status_series = base.get("status", pd.Series(index=base.index, dtype="object")).fillna("").astype(str).str.strip().str.lower()
@@ -2143,11 +2187,16 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
     df_anterior_metricas = filter_metrics_base(df_anterior)
 
     total_operacoes = len(df_metricas)
-    valor_total = df_metricas["valor_operacao"].sum()
-    valor_ponderado = df_metricas["valor_ponderado"].sum()
-    comissao_mapa_total = df_metricas["comissao_mapa"].sum()
-    comissao_mapa_ponderada = df_metricas["comissao_mapa_ponderada"].sum() if "comissao_mapa_ponderada" in df_metricas.columns else 0
-    ticket_medio = df_metricas["valor_operacao"].mean() if total_operacoes > 0 else 0
+    valor_total_series = safe_numeric_series(df_metricas, "valor_operacao")
+    valor_ponderado_series = safe_numeric_series(df_metricas, "valor_ponderado")
+    comissao_mapa_series = safe_numeric_series(df_metricas, "comissao_mapa")
+    comissao_mapa_ponderada_series = safe_numeric_series(df_metricas, "comissao_mapa_ponderada")
+
+    valor_total = valor_total_series.sum()
+    valor_ponderado = valor_ponderado_series.sum()
+    comissao_mapa_total = comissao_mapa_series.sum()
+    comissao_mapa_ponderada = comissao_mapa_ponderada_series.sum()
+    ticket_medio = valor_total_series.mean() if total_operacoes > 0 else 0
 
     if df_anterior_metricas is None or df_anterior_metricas.empty:
         total_operacoes_ant = total_operacoes
@@ -2179,13 +2228,16 @@ def render_metric_cards(df_filtrado: pd.DataFrame, escopo: str, df_anterior: pd.
     with m6:
         st.markdown(metric_card("Ticket Médio", format_brl_card(ticket_medio), f"Valor médio | {escopo}", trend=compare_metric_direction(ticket_medio, ticket_medio_ant), previous_value_label=format_brl_card(ticket_medio_ant), comparative_label=comparative_label), unsafe_allow_html=True)
 
-    render_metric_changes_panel(
-        df_intro_atual if df_intro_atual is not None else (df_filtrado if df_filtrado is not None else pd.DataFrame()),
-        df_intro_anterior if df_intro_anterior is not None else (df_anterior if df_anterior is not None else pd.DataFrame()),
-        df_metricas,
-        df_anterior_metricas if df_anterior_metricas is not None else pd.DataFrame(),
-        comparative_label,
-    )
+    if df_anterior_metricas is not None and not df_anterior_metricas.empty:
+        render_metric_changes_panel(
+            df_intro_atual if df_intro_atual is not None else (df_filtrado if df_filtrado is not None else pd.DataFrame()),
+            df_intro_anterior if df_intro_anterior is not None else (df_anterior if df_anterior is not None else pd.DataFrame()),
+            df_metricas,
+            df_anterior_metricas,
+            comparative_label,
+        )
+    else:
+        st.caption("Comparativo não exibido: nenhuma base comparativa válida foi carregada.")
 
 
 def render_empty_state(title: str, message: str):
@@ -3253,7 +3305,7 @@ def render_sidebar_menu():
         sessao = st.radio(
             "Sessão",
             options=["Novas Oportunidades", "Operações", "Controle de Documentos"],
-            index=0,
+            index=None,
             key="sidebar_sessao_mapa",
         )
         subsessao = None
@@ -3265,7 +3317,7 @@ def render_sidebar_menu():
                 index=0,
                 key="sidebar_subsessao_operacoes",
             )
-        st.caption("Use o menu lateral para alternar entre Novas Oportunidades, o painel comercial e o controle de documentos.")
+        st.caption("Selecione uma sessão. Os dados serão carregados somente após o clique, evitando processamento no acesso inicial.")
     return sessao, subsessao
 
 
@@ -3302,6 +3354,7 @@ def render_operations_section(visao_painel: str):
     arquivo_upload = None
     arquivo_anterior = None
     arquivo_anterior_auto = None
+    comparativo_identico = False
 
     if arquivos_excel:
         nomes_arquivos = [a.name for a in arquivos_excel]
@@ -3342,6 +3395,15 @@ def render_operations_section(visao_painel: str):
             else:
                 if nomes_comparativo and arquivo_anterior_nome != "Sem comparativo disponível":
                     arquivo_anterior = next(a for a in opcoes_comparativo if a.name == arquivo_anterior_nome)
+
+            if arquivo_anterior is not None and arquivo_escolhido is not None:
+                try:
+                    comparativo_identico = (
+                        calculate_file_sha256(arquivo_escolhido)
+                        == calculate_file_sha256(arquivo_anterior)
+                    )
+                except Exception:
+                    comparativo_identico = False
     else:
         arquivo_upload = st.file_uploader(
             "Envie a planilha Pipeline",
@@ -3390,13 +3452,28 @@ def render_operations_section(visao_painel: str):
 
     df_anterior = pd.DataFrame()
     if not is_novas_oportunidades:
-        try:
-            if arquivo_anterior is not None:
-                df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
-        except Exception:
-            df_anterior = pd.DataFrame()
+        if comparativo_identico:
+            st.warning(
+                "A planilha base e a planilha comparativa possuem conteúdo idêntico, "
+                "apesar dos nomes diferentes. O comparativo foi desativado nesta execução."
+            )
+        else:
+            try:
+                if arquivo_anterior is not None:
+                    df_anterior = parse_pipeline_excel_from_path(arquivo_anterior)
+            except Exception as comparative_exc:
+                st.warning(
+                    "Não foi possível ler a planilha comparativa. "
+                    f"Detalhe: {type(comparative_exc).__name__}: {comparative_exc}"
+                )
+                df_anterior = pd.DataFrame()
 
-    arquivo_anterior_label = "Não se aplica" if is_novas_oportunidades else (arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior")
+    if is_novas_oportunidades:
+        arquivo_anterior_label = "Não se aplica"
+    elif comparativo_identico:
+        arquivo_anterior_label = "Ignorado: conteúdo idêntico à base"
+    else:
+        arquivo_anterior_label = arquivo_anterior.name if arquivo_anterior is not None else "Sem comparativo anterior"
 
     st.markdown(
         f"""
@@ -4165,18 +4242,35 @@ def render_document_control_section():
 try:
     sessao_menu, visao_operacoes_menu = render_sidebar_menu()
 
-    if sessao_menu == "Novas Oportunidades":
+    if sessao_menu is None:
+        st.markdown(
+            """
+            <div class="section-card">
+                <div class="section-head">
+                    <h3 class="section-title">Selecione uma sessão</h3>
+                    <p class="section-note">
+                        O painel não carrega o Google Drive nem as planilhas no acesso inicial.
+                        Escolha uma sessão no menu lateral para iniciar a leitura sob demanda.
+                    </p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif sessao_menu == "Novas Oportunidades":
         render_operations_section("Analisadas e Declinadas")
     elif sessao_menu == "Operações":
         render_operations_section(visao_operacoes_menu or "Top Five")
     else:
         render_document_control_section()
 except Exception as exc:
+    traceback.print_exc()
     st.error(
         "Não foi possível carregar esta sessão. "
         f"Erro: {type(exc).__name__}: {exc}"
     )
+    st.exception(exc)
     st.info(
-        "A aplicação permaneceu ativa. Verifique o arquivo-base selecionado "
-        "ou tente abrir novamente a sessão."
+        "A aplicação permaneceu ativa. O detalhamento acima permite identificar "
+        "se o problema veio do ambiente, do Google Drive ou da planilha selecionada."
     )
