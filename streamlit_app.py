@@ -38,7 +38,7 @@ MAPA_LIGHT_2 = "#D8EDF5"
 MAPA_BORDER = "#B7D6E2"
 TEXT_DARK = "#122230"
 
-APP_BUILD = "V_63"
+APP_BUILD = "V_64"
 
 
 def normalize_category_text(value) -> str:
@@ -2016,10 +2016,6 @@ def render_brand_header():
                 <div>
                     <div class="brand-kicker">MAPA Investimentos</div>
                     <h1 class="brand-title">Painel de operações</h1>
-                    <p class="brand-subtitle">
-                        Monitoramento executivo do pipeline comercial e financeiro, com leitura direta da aba
-                        <strong>Pipeline</strong>, filtros operacionais, métricas consolidadas e cards expansíveis por operação.
-                    </p>
                     <div class="chip-row">
                         <span class="brand-chip">Built to Suit</span>
                         <span class="brand-chip">Sale Leaseback</span>
@@ -2054,12 +2050,13 @@ def is_top_five(series: pd.Series) -> pd.Series:
 
 
 def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd.DataFrame:
+    note_html = f'<p class="section-note">{escape(note)}</p>' if str(note or "").strip() else ""
     st.markdown(
         f"""
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Filtros executivos</h3>
-                <p class="section-note">{escape(note)}</p>
+                {note_html}
             </div>
         """,
         unsafe_allow_html=True,
@@ -2843,10 +2840,11 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
-    st.markdown(
-        f'<p class="section-note">Esta seção reúne filtros, métricas, gráficos e tabela(s) da visão {escape(titulo_escopo)}.</p>',
-        unsafe_allow_html=True,
-    )
+    if page_mode != "top_five":
+        st.markdown(
+            f'<p class="section-note">Esta seção reúne filtros, métricas, gráficos e tabela(s) da visão {escape(titulo_escopo)}.</p>',
+            unsafe_allow_html=True,
+        )
     st.markdown('</div>', unsafe_allow_html=True)
 
     df_filtrado, filter_state = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
@@ -2858,8 +2856,6 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
         key=f"{key_prefix}_print_html",
         label=f"Imprimir | {titulo_escopo}",
     )
-
-    st.caption("Os cards, gráficos e tabelas abaixo refletem exatamente o recorte filtrado desta seção.")
 
     render_metric_cards(
         df_visao,
@@ -3242,7 +3238,7 @@ def render_documents_due_soon_by_responsavel(df_filtrado: pd.DataFrame):
 
     for responsavel, df_resp in base.groupby("responsavel", dropna=False):
         st.markdown(f'<div class="doc-due-group-title">{escape(str(responsavel))}</div>', unsafe_allow_html=True)
-        st.markdown(build_document_due_cards_html(df_resp), unsafe_allow_html=True)
+        st.html(build_document_due_cards_html(df_resp))
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -3294,9 +3290,6 @@ def render_document_table(df_filtrado: pd.DataFrame, legenda_df: pd.DataFrame | 
     }
     st.dataframe(display_df[table_columns].rename(columns=rename_columns), use_container_width=True, hide_index=True, height=620)
 
-    if legenda_df is not None and not legenda_df.empty:
-        with st.expander("Legendas da planilha", expanded=False):
-            st.dataframe(legenda_df, use_container_width=True, hide_index=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -3304,13 +3297,12 @@ def render_document_table(df_filtrado: pd.DataFrame, legenda_df: pd.DataFrame | 
 def render_sidebar_menu():
     with st.sidebar:
         st.markdown("### Menu")
-        sessao_escolhida = st.radio(
+        sessao = st.radio(
             "Sessão",
-            options=["Selecione uma sessão", "Novas Oportunidades", "Operações", "Controle de Documentos"],
+            options=["Novas Oportunidades", "Operações", "Controle de Documentos"],
             index=0,
             key="sidebar_sessao_mapa",
         )
-        sessao = None if sessao_escolhida == "Selecione uma sessão" else sessao_escolhida
         subsessao = None
         if sessao == "Operações":
             st.markdown("#### Subsessões")
@@ -3320,7 +3312,6 @@ def render_sidebar_menu():
                 index=0,
                 key="sidebar_subsessao_operacoes",
             )
-        st.caption("Selecione uma sessão. Os dados serão carregados somente após o clique, evitando processamento no acesso inicial.")
         st.caption(f"Build implantada: {APP_BUILD}")
     return sessao, subsessao
 
@@ -3345,8 +3336,8 @@ def render_operations_section(visao_painel: str):
         <div class="section-card">
             <div class="section-head">
                 <h3 class="section-title">Arquivos carregados</h3>
-                <p class="section-note">Selecione a planilha manualmente ou mantenha a leitura automática do arquivo mais recente. Se o Google Drive público falhar, o painel tenta usar arquivos locais ou uma planilha enviada manualmente.</p>
             </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -3424,10 +3415,7 @@ def render_operations_section(visao_painel: str):
         st.markdown(
             f"""
             <div class="meta-bar" style="margin-top:10px;">
-                <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
                 <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
-                <span class="meta-pill"><span class="dot"></span>Comparativo: Sem comparativo anterior</span>
-            </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3482,23 +3470,7 @@ def render_operations_section(visao_painel: str):
     st.markdown(
         f"""
         <div class="meta-bar" style="margin-top:10px;">
-            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_dados)}</span>
             <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_label)}</span>
-            <span class="meta-pill"><span class="dot"></span>Comparativo: {escape(arquivo_anterior_label)}</span>
-            <span class="meta-pill"><span class="dot"></span>Modo de carga: {"Sob demanda" if is_novas_oportunidades else "Sob demanda + comparativo"}</span>
-        </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div class="section-card">
-            <div class="section-head">
-                <h3 class="section-title">Operações</h3>
-                <p class="section-note">Use o menu lateral para alternar entre as visões Top Five, Secundárias e Consolidado. Cada sessão carrega apenas a base necessária quando é aberta.</p>
-            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3528,7 +3500,7 @@ def render_operations_section(visao_painel: str):
                 comparative_label=arquivo_anterior_label,
                 key_prefix="top_five",
                 escopo="Top Five",
-                filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
+                filter_note="",
                 page_mode="top_five",
             )
         elif visao_painel == "Secundárias":
@@ -4059,18 +4031,6 @@ def render_analyzed_operations_table(df_filtrado: pd.DataFrame):
 
 
 def render_analyzed_operations_section(df_base: pd.DataFrame):
-    st.markdown(
-        """
-        <div class="section-card">
-            <div class="section-head">
-                <h3 class="section-title">Novas Oportunidades</h3>
-                <p class="section-note">Visão executiva da aba específica da planilha com operações recebidas, analisadas e declinadas, incluindo tempo médio de devolução e detalhamento de análise. Nesta seção, não há comparativo com a base anterior.</p>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     if df_base is None or df_base.empty:
         st.warning("A aba 'Operação Analisada ou Reprovada' não foi encontrada ou não possui registros válidos.")
         return
@@ -4098,18 +4058,6 @@ def render_analyzed_operations_section(df_base: pd.DataFrame):
 
 
 def render_document_control_section():
-    st.markdown(
-        """
-        <div class="section-card">
-            <div class="section-head">
-                <h3 class="section-title">Controle de Documentos</h3>
-                <p class="section-note">Painel de acompanhamento das obrigações contratuais, usando a mesma lógica da base de Operações: leitura automática de um arquivo Excel na pasta pública do Google Drive, com fallback local/upload.</p>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     drive_error = None
     fonte_docs = "Google Drive público"
     arquivos_docs = []
@@ -4139,17 +4087,6 @@ def render_document_control_section():
             fonte_docs = "Arquivos locais do repositório"
 
     arquivo_doc_escolhido = arquivos_docs[0] if arquivos_docs else None
-
-    st.markdown(
-        """
-        <div class="section-card">
-            <div class="section-head">
-                <h3 class="section-title">Base de documentos</h3>
-                <p class="section-note">Mantenha a planilha de Gestão de Contratos e Obrigações em Excel na pasta pública do Google Drive. Se a leitura automática falhar, o painel tenta usar arquivos locais do repositório ou um upload manual.</p>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     if drive_error:
         st.warning(f"Google Drive público indisponível no momento. {drive_error}")
@@ -4186,11 +4123,9 @@ def render_document_control_section():
 
     if arquivo_doc_escolhido is None and arquivo_doc_upload is None:
         st.markdown(
-            f"""
+            """
             <div class="meta-bar" style="margin-top:10px;">
-                <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_docs)}</span>
                 <span class="meta-pill"><span class="dot"></span>Arquivo carregado: Nenhum arquivo selecionado</span>
-            </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -4206,7 +4141,7 @@ def render_document_control_section():
             arquivo_final = arquivo_doc_upload.name
         else:
             df_docs = parse_document_control_excel_from_path(arquivo_doc_escolhido)
-            legenda_df = parse_document_legendas_from_path(arquivo_doc_escolhido)
+            legenda_df = pd.DataFrame()
             fonte_final = fonte_docs
             arquivo_final = arquivo_doc_escolhido.name
     except Exception as e:
@@ -4216,9 +4151,7 @@ def render_document_control_section():
     st.markdown(
         f"""
         <div class="meta-bar" style="margin-top:10px;">
-            <span class="meta-pill"><span class="dot"></span>Fonte: {escape(fonte_final)}</span>
             <span class="meta-pill"><span class="dot"></span>Arquivo carregado: {escape(arquivo_final)}</span>
-        </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -4236,32 +4169,16 @@ def render_document_control_section():
         label="Imprimir | Gestão de Documentos",
     )
 
-    st.caption("Os cards, gráficos e tabela abaixo refletem exatamente o recorte filtrado da base documental.")
     render_document_metric_cards(df_docs_filtrado)
     render_document_charts(df_docs_filtrado)
     render_documents_due_soon_by_responsavel(df_docs_filtrado)
-    render_document_table(df_docs_filtrado, legenda_df=legenda_df)
+    render_document_table(df_docs_filtrado)
 
 
 try:
     sessao_menu, visao_operacoes_menu = render_sidebar_menu()
 
-    if sessao_menu is None:
-        st.markdown(
-            """
-            <div class="section-card">
-                <div class="section-head">
-                    <h3 class="section-title">Selecione uma sessão</h3>
-                    <p class="section-note">
-                        O painel não carrega o Google Drive nem as planilhas no acesso inicial.
-                        Escolha uma sessão no menu lateral para iniciar a leitura sob demanda.
-                    </p>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    elif sessao_menu == "Novas Oportunidades":
+    if sessao_menu == "Novas Oportunidades":
         render_operations_section("Analisadas e Declinadas")
     elif sessao_menu == "Operações":
         render_operations_section(visao_operacoes_menu or "Top Five")
