@@ -2001,7 +2001,12 @@ def is_top_five(series: pd.Series) -> pd.Series:
     return series.astype(str).str.strip().str.lower().eq("sim")
 
 
-def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd.DataFrame:
+def render_filter_block(
+    df_base: pd.DataFrame,
+    key_prefix: str,
+    note: str,
+    excluded_status_codes_by_default: set[int] | None = None,
+) -> pd.DataFrame:
     st.markdown(
         f"""
         <div class="section-card">
@@ -2030,12 +2035,24 @@ def render_filter_block(df_base: pd.DataFrame, key_prefix: str, note: str) -> pd
             key=f"{key_prefix}_responsavel",
         )
     with col2:
+        status_key = f"{key_prefix}_status"
+        excluded_status_codes = excluded_status_codes_by_default or set()
+        default_status_options = [
+            status
+            for status in status_options
+            if extract_leading_number(status) not in excluded_status_codes
+        ]
+
+        # O estado padrão é aplicado apenas na primeira abertura da visão.
+        # Depois disso, o usuário pode incluir normalmente os status 5, 6 e 9.
+        if status_key not in st.session_state:
+            st.session_state[status_key] = default_status_options
+
         f_status = st.multiselect(
             "Status",
             status_options,
-            default=status_options,
             placeholder="Selecione um ou mais status",
-            key=f"{key_prefix}_status",
+            key=status_key,
         )
     with col3:
         f_operacao = st.multiselect(
@@ -2767,7 +2784,16 @@ def build_documents_print_html(filter_state: dict, df_visao: pd.DataFrame):
 
 
 
-def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.DataFrame | None, comparative_label: str, key_prefix: str, escopo: str, filter_note: str, page_mode: str):
+def render_dashboard_page(
+    df_page_base: pd.DataFrame,
+    df_page_base_anterior: pd.DataFrame | None,
+    comparative_label: str,
+    key_prefix: str,
+    escopo: str,
+    filter_note: str,
+    page_mode: str,
+    excluded_status_codes_by_default: set[int] | None = None,
+):
     titulo_escopo = str(escopo).title() if str(escopo).lower() != "consolidado" else "Consolidado"
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown(f'<h3 class="section-title">Visão | {escape(titulo_escopo)}</h3>', unsafe_allow_html=True)
@@ -2777,7 +2803,12 @@ def render_dashboard_page(df_page_base: pd.DataFrame, df_page_base_anterior: pd.
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    df_filtrado, filter_state = render_filter_block(df_page_base, key_prefix=key_prefix, note=filter_note)
+    df_filtrado, filter_state = render_filter_block(
+        df_page_base,
+        key_prefix=key_prefix,
+        note=filter_note,
+        excluded_status_codes_by_default=excluded_status_codes_by_default,
+    )
     df_visao = build_filtered_dashboard_view(df_filtrado)
     df_visao_anterior = apply_dashboard_filter_state(df_page_base_anterior, filter_state)
 
@@ -3419,8 +3450,9 @@ def render_operations_section(visao_painel: str):
                 comparative_label=arquivo_anterior_label,
                 key_prefix="consolidado",
                 escopo="consolidado",
-                filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias. Por padrão, os status 5. Perdido, 6. Não Aprovado e 9. Não Evoluiu começam desmarcados, mas permanecem disponíveis para seleção.",
                 page_mode="consolidado",
+                excluded_status_codes_by_default={5, 6, 9},
             )
         elif visao_painel == "Top Five":
             render_dashboard_page(
@@ -3429,8 +3461,9 @@ def render_operations_section(visao_painel: str):
                 comparative_label=arquivo_anterior_label,
                 key_prefix="top_five",
                 escopo="Top Five",
-                filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five.",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e a tabela exclusiva das operações Top Five. Por padrão, os status 5. Perdido, 6. Não Aprovado e 9. Não Evoluiu começam desmarcados, mas permanecem disponíveis para seleção.",
                 page_mode="top_five",
+                excluded_status_codes_by_default={5, 6, 9},
             )
         elif visao_painel == "Secundárias":
             render_dashboard_page(
@@ -3449,8 +3482,9 @@ def render_operations_section(visao_painel: str):
                 comparative_label=arquivo_anterior_label,
                 key_prefix="consolidado_fallback",
                 escopo="consolidado",
-                filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias.",
+                filter_note="Os filtros abaixo impactam métricas, gráficos e as tabelas Top Five e Secundárias. Por padrão, os status 5. Perdido, 6. Não Aprovado e 9. Não Evoluiu começam desmarcados, mas permanecem disponíveis para seleção.",
                 page_mode="consolidado",
+                excluded_status_codes_by_default={5, 6, 9},
             )
 
 
